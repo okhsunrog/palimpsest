@@ -1,3 +1,6 @@
+use std::sync::OnceLock;
+
+use regex::Regex;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -24,7 +27,98 @@ pub enum ZfsError {
     },
 }
 
+fn dataset_not_found_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"cannot open '([^']+)': (?:dataset does not exist|no such pool or dataset)")
+            .expect("dataset_not_found regex compiles")
+    })
+}
+
+fn busy_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"cannot [a-z ]+ '([^']+)': dataset is busy")
+            .expect("busy regex compiles")
+    })
+}
+
 pub fn classify_stderr(stderr: &str, exit_code: Option<i32>) -> ZfsError {
-    let _ = (stderr, exit_code);
-    todo!("spec 001-foundation: implement regex classifier with at minimum DatasetNotFound, PermissionDenied, NoSpace patterns")
+    if let Some(caps) = dataset_not_found_re().captures(stderr) {
+        return ZfsError::DatasetNotFound {
+            name: caps[1].to_string(),
+        };
+    }
+    if let Some(caps) = busy_re().captures(stderr) {
+        return ZfsError::Busy {
+            name: caps[1].to_string(),
+        };
+    }
+    if stderr.contains("permission denied") {
+        return ZfsError::PermissionDenied;
+    }
+    if stderr.contains("out of space") || stderr.contains("no space left on device") {
+        return ZfsError::NoSpace;
+    }
+    ZfsError::Other {
+        exit_code,
+        stderr: stderr.trim().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_dataset_not_found_dataset_form() {
+        let err = classify_stderr("cannot open 'tank/foo': dataset does not exist\n", Some(1));
+        let ZfsError::DatasetNotFound { name } = err else {
+            panic!("expected DatasetNotFound");
+        };
+        assert_eq!(name, "tank/foo");
+    }
+
+    #[test]
+    fn classifies_dataset_not_found_pool_form() {
+        let err = classify_stderr("cannot open 'nope': no such pool or dataset\n", Some(1));
+        let ZfsError::DatasetNotFound { name } = err else {
+            panic!("expected DatasetNotFound");
+        };
+        assert_eq!(name, "nope");
+    }
+
+    #[test]
+    fn classifies_permission_denied() {
+        let err = classify_stderr("cannot list 'tank': permission denied\n", Some(1));
+        assert!(matches!(err, ZfsError::PermissionDenied));
+    }
+
+    #[test]
+    fn classifies_out_of_space() {
+        let err = classify_stderr("out of space\n", Some(1));
+        assert!(matches!(err, ZfsError::NoSpace));
+    }
+
+    #[test]
+    fn classifies_busy() {
+        let err = classify_stderr(
+            "cannot destroy 'tank/foo': dataset is busy\n",
+            Some(1),
+        );
+        let ZfsError::Busy { name } = err else {
+            panic!("expected Busy");
+        };
+        assert_eq!(name, "tank/foo");
+    }
+
+    #[test]
+    fn falls_back_to_other_with_trimmed_stderr() {
+        let err = classify_stderr("some weird new zfs error\n", Some(2));
+        let ZfsError::Other { exit_code, stderr } = err else {
+            panic!("expected Other");
+        };
+        assert_eq!(exit_code, Some(2));
+        assert_eq!(stderr, "some weird new zfs error");
+    }
 }
