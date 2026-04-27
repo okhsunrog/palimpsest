@@ -1,0 +1,1 @@
+{"output_version":{"command":"zfs get","vers_major":0,"vers_minor":1},"datasets":{"tank/data":{"name":"tank/data","type":"FILESYSTEM","pool":"tank","createtxg":"9","properties":{"quota":{"value":"104857600","source":{"type":"LOCAL","data":"-"}},"mountpoint":{"value":"/mnt/test","source":{"type":"LOCAL","data":"-"}}}}}}

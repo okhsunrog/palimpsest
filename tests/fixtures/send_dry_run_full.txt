@@ -1,0 +1,2 @@
+full	tank/data/home@snap1	44144
+size	44144

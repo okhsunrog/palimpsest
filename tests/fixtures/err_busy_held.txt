@@ -1,0 +1,1 @@
+cannot destroy snapshot tank/data/home@snap1: it's being held. Run 'zfs holds -r tank/data/home@snap1' to see holders.

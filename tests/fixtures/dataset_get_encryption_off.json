@@ -1,0 +1,1 @@
+{"output_version":{"command":"zfs get","vers_major":0,"vers_minor":1},"datasets":{"tank":{"name":"tank","type":"FILESYSTEM","pool":"tank","createtxg":"1","properties":{"encryption":{"value":"off","source":{"type":"DEFAULT","data":"-"}}}}}}

@@ -1,0 +1,9 @@
+resume token contents:
+nvlist version: 0
+	object = 0x24
+	offset = 0x0
+	bytes = 0x2a48
+	toguid = 0xd3b96c8266d7cfe6
+	toname = tank/data/home@snap1
+full send of tank/data/home@snap1 estimated size is 32.5K
+total estimated size is 32.5K

@@ -10,25 +10,63 @@ fn fixture(name: &str) -> Vec<u8> {
 async fn list_simple_returns_one_filesystem() {
     let runner = RecordingRunner::new().record(
         "zfs",
-        &["list", "-j", "-p", "novafs"],
+        &["list", "-j", "-p", "tank"],
         fixture("dataset_list_simple.json"),
         vec![],
         0,
     );
     let opts = ListOptions {
-        roots: vec!["novafs".into()],
+        roots: vec!["tank".into()],
         ..Default::default()
     };
     let entries = list(&runner, &opts).await.expect("list succeeds");
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].name, "novafs");
+    assert_eq!(entries[0].name, "tank");
     assert_eq!(entries[0].kind, DatasetType::Filesystem);
-    assert_eq!(entries[0].pool, "novafs");
+    assert_eq!(entries[0].pool, "tank");
     assert!(entries[0].properties.contains_key("used"));
 }
 
 #[tokio::test]
 async fn list_recursive_with_depth() {
+    let runner = RecordingRunner::new().record(
+        "zfs",
+        &["list", "-j", "-p", "-r", "-d", "2", "tank"],
+        fixture("dataset_list_recursive.json"),
+        vec![],
+        0,
+    );
+    let opts = ListOptions {
+        recursive: true,
+        depth: Some(2),
+        roots: vec!["tank".into()],
+        ..Default::default()
+    };
+    let entries = list(&runner, &opts).await.expect("list succeeds");
+    // tank, tank/data, tank/data/home, tank/encrypted (4 — hierarchy capped at depth 2)
+    assert!(entries.len() >= 3, "got {} entries", entries.len());
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    assert!(names.contains(&"tank"));
+    assert!(names.contains(&"tank/data"));
+}
+
+#[tokio::test]
+async fn list_mixed_types_separates_kinds() {
+    // Fixture was captured with `-t all`; our build_args emits the four types
+    // comma-joined in declaration order. The RecordingRunner key matches the
+    // emitted command line.
+    let opts = ListOptions {
+        recursive: true,
+        depth: Some(2),
+        types: vec![
+            DatasetType::Filesystem,
+            DatasetType::Volume,
+            DatasetType::Snapshot,
+            DatasetType::Bookmark,
+        ],
+        roots: vec!["tank/data/home".into()],
+        ..Default::default()
+    };
     let runner = RecordingRunner::new().record(
         "zfs",
         &[
@@ -38,54 +76,15 @@ async fn list_recursive_with_depth() {
             "-r",
             "-d",
             "2",
-            "novafs/arch0/data/root",
-        ],
-        fixture("dataset_list_recursive.json"),
-        vec![],
-        0,
-    );
-    let opts = ListOptions {
-        recursive: true,
-        depth: Some(2),
-        roots: vec!["novafs/arch0/data/root".into()],
-        ..Default::default()
-    };
-    let entries = list(&runner, &opts).await.expect("list succeeds");
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].name, "novafs/arch0/data/root");
-}
-
-#[tokio::test]
-async fn list_mixed_types_separates_kinds() {
-    let runner = RecordingRunner::new().record(
-        "zfs",
-        &[
-            "list",
-            "-j",
-            "-p",
-            "-r",
-            "-d",
-            "1",
             "-t",
             "filesystem,volume,snapshot,bookmark",
-            "novafs/arch0/data/home",
+            "tank/data/home",
         ],
         fixture("dataset_list_mixed.json"),
         vec![],
         0,
     );
-    let opts = ListOptions {
-        recursive: true,
-        depth: Some(1),
-        types: vec![
-            DatasetType::Filesystem,
-            DatasetType::Volume,
-            DatasetType::Snapshot,
-            DatasetType::Bookmark,
-        ],
-        roots: vec!["novafs/arch0/data/home".into()],
-        ..Default::default()
-    };
+
     let entries = list(&runner, &opts).await.expect("list succeeds");
 
     let fs_count = entries
@@ -102,10 +101,7 @@ async fn list_mixed_types_separates_kinds() {
         .count();
 
     assert_eq!(fs_count, 1);
-    assert!(
-        snap_count > 0,
-        "mixed fixture should include snapshots, found {snap_count}"
-    );
+    assert_eq!(snap_count, 2, "fixture has snap1 and snap2");
     assert_eq!(bm_count, 1);
 
     let snap = entries
