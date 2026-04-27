@@ -40,6 +40,19 @@ pub enum PropertySourceKind {
     Temporary,
 }
 
+impl PropertySourceKind {
+    pub fn cli_name(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Local => "local",
+            Self::Default => "default",
+            Self::Inherited => "inherited",
+            Self::Received => "received",
+            Self::Temporary => "temporary",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct PropertySource {
     #[serde(rename = "type")]

@@ -14,6 +14,9 @@ pub enum ZfsError {
     #[error("dataset is busy: {name}")]
     Busy { name: String },
 
+    #[error("pool not found: {name}")]
+    PoolNotFound { name: String },
+
     #[error("out of space")]
     NoSpace,
 
@@ -43,7 +46,20 @@ fn busy_re() -> &'static Regex {
     })
 }
 
+fn pool_not_found_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"cannot import '([^']+)': no such pool available")
+            .expect("pool_not_found regex compiles")
+    })
+}
+
 pub fn classify_stderr(stderr: &str, exit_code: Option<i32>) -> ZfsError {
+    if let Some(caps) = pool_not_found_re().captures(stderr) {
+        return ZfsError::PoolNotFound {
+            name: caps[1].to_string(),
+        };
+    }
     if let Some(caps) = dataset_not_found_re().captures(stderr) {
         return ZfsError::DatasetNotFound {
             name: caps[1].to_string(),
@@ -110,6 +126,18 @@ mod tests {
             panic!("expected Busy");
         };
         assert_eq!(name, "tank/foo");
+    }
+
+    #[test]
+    fn classifies_pool_not_found() {
+        let err = classify_stderr(
+            "cannot import 'tank': no such pool available\n",
+            Some(1),
+        );
+        let ZfsError::PoolNotFound { name } = err else {
+            panic!("expected PoolNotFound, got {err:?}");
+        };
+        assert_eq!(name, "tank");
     }
 
     #[test]

@@ -27,3 +27,8 @@ pub struct ZfsListEntry {
     #[serde(default)]
     pub properties: PropertyMap,
 }
+
+// `zfs get -j` produces structurally identical entries to `zfs list -j`.
+// Confirmed against captured fixtures from OpenZFS 2.4.1.
+pub type ZfsGetEntry = ZfsListEntry;
+pub type ZfsGetOutput = ZfsListOutput;
