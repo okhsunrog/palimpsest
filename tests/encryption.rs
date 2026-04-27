@@ -1,18 +1,37 @@
 use palimpsest::encryption::{load_key, unload_key};
 use palimpsest::{RecordingRunner, ZfsError};
 
+fn fixture(name: &str) -> Vec<u8> {
+    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+    std::fs::read(&path).unwrap_or_else(|e| panic!("loading fixture {name}: {e}"))
+}
+
 #[tokio::test]
 async fn unload_key_returns_ok_on_success() {
     let runner = RecordingRunner::new().record(
         "zfs",
-        &["unload-key", "tank"],
+        &["unload-key", "tank/encrypted"],
         vec![],
         vec![],
         0,
     );
-    unload_key(&runner, "tank")
+    unload_key(&runner, "tank/encrypted")
         .await
         .expect("unload_key succeeds");
+}
+
+#[tokio::test]
+async fn unload_key_is_idempotent_when_already_unloaded() {
+    let runner = RecordingRunner::new().record(
+        "zfs",
+        &["unload-key", "tank/encrypted"],
+        vec![],
+        fixture("err_unload_key_not_loaded.stderr"),
+        255,
+    );
+    unload_key(&runner, "tank/encrypted")
+        .await
+        .expect("idempotent unload_key returns Ok");
 }
 
 #[tokio::test]
@@ -31,13 +50,47 @@ async fn unload_key_classifies_dataset_not_found() {
 }
 
 #[tokio::test]
+async fn unload_key_propagates_unencrypted_error() {
+    let runner = RecordingRunner::new().record(
+        "zfs",
+        &["unload-key", "tank"],
+        vec![],
+        fixture("err_unload_key_unencrypted.stderr"),
+        255,
+    );
+    let err = unload_key(&runner, "tank")
+        .await
+        .expect_err("unload_key on unencrypted dataset should fail");
+    let ZfsError::Other { stderr, .. } = err else {
+        panic!("expected Other, got {err:?}");
+    };
+    assert!(stderr.contains("not encrypted"));
+}
+
+#[tokio::test]
 async fn load_key_returns_ok_on_success() {
     let runner = RecordingRunner::new().record(
         "zfs",
-        &["load-key", "tank"],
+        &["load-key", "tank/encrypted"],
         vec![],
         vec![],
         0,
     );
-    load_key(&runner, "tank").await.expect("load_key succeeds");
+    load_key(&runner, "tank/encrypted")
+        .await
+        .expect("load_key succeeds");
+}
+
+#[tokio::test]
+async fn load_key_is_idempotent_when_already_loaded() {
+    let runner = RecordingRunner::new().record(
+        "zfs",
+        &["load-key", "tank/encrypted"],
+        vec![],
+        fixture("err_load_key_already.stderr"),
+        255,
+    );
+    load_key(&runner, "tank/encrypted")
+        .await
+        .expect("idempotent load_key returns Ok");
 }
