@@ -41,8 +41,7 @@ fn dataset_not_found_re() -> &'static Regex {
 fn busy_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"cannot [a-z ]+ '([^']+)': dataset is busy")
-            .expect("busy regex compiles")
+        Regex::new(r"cannot [a-z ]+ '([^']+)': dataset is busy").expect("busy regex compiles")
     })
 }
 
@@ -118,10 +117,7 @@ mod tests {
 
     #[test]
     fn classifies_busy() {
-        let err = classify_stderr(
-            "cannot destroy 'tank/foo': dataset is busy\n",
-            Some(1),
-        );
+        let err = classify_stderr("cannot destroy 'tank/foo': dataset is busy\n", Some(1));
         let ZfsError::Busy { name } = err else {
             panic!("expected Busy");
         };
@@ -130,10 +126,7 @@ mod tests {
 
     #[test]
     fn classifies_pool_not_found() {
-        let err = classify_stderr(
-            "cannot import 'tank': no such pool available\n",
-            Some(1),
-        );
+        let err = classify_stderr("cannot import 'tank': no such pool available\n", Some(1));
         let ZfsError::PoolNotFound { name } = err else {
             panic!("expected PoolNotFound, got {err:?}");
         };

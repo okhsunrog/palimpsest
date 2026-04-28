@@ -1,7 +1,5 @@
 use crate::error::{ZfsError, classify_stderr};
-use crate::models::{
-    DatasetType, PropertySourceKind, PropertyValue, ZfsGetEntry, ZfsGetOutput,
-};
+use crate::models::{DatasetType, PropertySourceKind, PropertyValue, ZfsGetEntry, ZfsGetOutput};
 use crate::runner::CommandRunner;
 
 #[derive(Default, Clone, Debug)]
@@ -21,7 +19,9 @@ impl GetOptions {
         if self.properties.is_empty() {
             return Err(ZfsError::Other {
                 exit_code: None,
-                stderr: "GetOptions::properties must not be empty (use vec![\"all\".into()] for all)".to_string(),
+                stderr:
+                    "GetOptions::properties must not be empty (use vec![\"all\".into()] for all)"
+                        .to_string(),
             });
         }
         let mut args: Vec<String> = vec!["get".into(), "-j".into(), "-p".into()];

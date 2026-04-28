@@ -144,6 +144,8 @@ async fn list_returns_typed_error_on_missing_dataset() {
 async fn list_returns_io_error_when_runner_has_no_fixture() {
     let runner = RecordingRunner::new();
     let opts = ListOptions::default();
-    let err = list(&runner, &opts).await.expect_err("unmatched call should fail");
+    let err = list(&runner, &opts)
+        .await
+        .expect_err("unmatched call should fail");
     assert!(matches!(err, ZfsError::Spawn(_)));
 }

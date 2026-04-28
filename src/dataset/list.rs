@@ -88,8 +88,18 @@ mod tests {
         assert_eq!(
             opts.build_args(),
             vec![
-                "list", "-j", "-p", "-r", "-d", "2", "-t", "filesystem,snapshot", "-o",
-                "name,used", "tank", "tank/sub"
+                "list",
+                "-j",
+                "-p",
+                "-r",
+                "-d",
+                "2",
+                "-t",
+                "filesystem,snapshot",
+                "-o",
+                "name,used",
+                "tank",
+                "tank/sub"
             ]
         );
     }

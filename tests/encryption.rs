@@ -8,13 +8,8 @@ fn fixture(name: &str) -> Vec<u8> {
 
 #[tokio::test]
 async fn unload_key_returns_ok_on_success() {
-    let runner = RecordingRunner::new().record(
-        "zfs",
-        &["unload-key", "tank/encrypted"],
-        vec![],
-        vec![],
-        0,
-    );
+    let runner =
+        RecordingRunner::new().record("zfs", &["unload-key", "tank/encrypted"], vec![], vec![], 0);
     unload_key(&runner, "tank/encrypted")
         .await
         .expect("unload_key succeeds");
@@ -69,13 +64,8 @@ async fn unload_key_propagates_unencrypted_error() {
 
 #[tokio::test]
 async fn load_key_returns_ok_on_success() {
-    let runner = RecordingRunner::new().record(
-        "zfs",
-        &["load-key", "tank/encrypted"],
-        vec![],
-        vec![],
-        0,
-    );
+    let runner =
+        RecordingRunner::new().record("zfs", &["load-key", "tank/encrypted"], vec![], vec![], 0);
     load_key(&runner, "tank/encrypted")
         .await
         .expect("load_key succeeds");

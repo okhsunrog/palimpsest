@@ -95,8 +95,7 @@ async fn get_recursive_returns_multiple_entries() {
     );
     for entry in &entries {
         assert!(
-            entry.properties.contains_key("mountpoint")
-                || entry.properties.contains_key("used"),
+            entry.properties.contains_key("mountpoint") || entry.properties.contains_key("used"),
             "entry {} missing requested properties",
             entry.name
         );
@@ -107,15 +106,7 @@ async fn get_recursive_returns_multiple_entries() {
 async fn get_source_filter_returns_only_local_properties() {
     let runner = RecordingRunner::new().record(
         "zfs",
-        &[
-            "get",
-            "-j",
-            "-p",
-            "-s",
-            "local",
-            "all",
-            "tank/data",
-        ],
+        &["get", "-j", "-p", "-s", "local", "all", "tank/data"],
         fixture("dataset_get_source_local.json"),
         vec![],
         0,

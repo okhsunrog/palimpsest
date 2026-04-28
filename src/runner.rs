@@ -54,7 +54,8 @@ impl RecordingRunner {
             program: program.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
         };
-        self.responses.insert(key, make_output(stdout, stderr, exit_code));
+        self.responses
+            .insert(key, make_output(stdout, stderr, exit_code));
         self
     }
 }
