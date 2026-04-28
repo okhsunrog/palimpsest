@@ -68,3 +68,28 @@ pub async fn load_key_with_passphrase(
     }
     Err(classify_stderr(&stderr, output.status.code()))
 }
+
+// `zfs load-key -L <keylocation> <dataset>` — load a key with an explicit
+// keylocation override. Useful when the dataset's stored `keylocation` is
+// `prompt` but we have the key in a known file path (e.g., the install
+// pipeline writes the key file to /etc/zfs/zroot.key and loads from there).
+//
+// `keylocation` is a ZFS-format string: `file:///path`, `prompt`,
+// `https://...`, `http://...`. Idempotent on "Key already loaded".
+pub async fn load_key_with_keylocation(
+    runner: &dyn CommandRunner,
+    dataset: &str,
+    keylocation: &str,
+) -> Result<(), ZfsError> {
+    let output = runner
+        .run(Cmd::new("zfs").args(["load-key", "-L", keylocation, dataset]))
+        .await?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains(ALREADY_LOADED) {
+        return Ok(());
+    }
+    Err(classify_stderr(&stderr, output.status.code()))
+}

@@ -293,6 +293,14 @@ impl Dataset {
         crate::encryption::load_key_with_passphrase(&*self.runner, &self.name, passphrase).await
     }
 
+    /// `zfs load-key -L <keylocation> <dataset>` — load with an explicit
+    /// keylocation override (e.g., `file:///path` when the key file lives at
+    /// a known location but the dataset's `keylocation` property is `prompt`).
+    /// Idempotent on already-loaded.
+    pub async fn load_key_with_keylocation(&self, keylocation: &str) -> Result<(), ZfsError> {
+        crate::encryption::load_key_with_keylocation(&*self.runner, &self.name, keylocation).await
+    }
+
     /// `zfs unload-key <dataset>`. Idempotent on already-unloaded.
     pub async fn unload_key(&self) -> Result<(), ZfsError> {
         crate::encryption::unload_key(&*self.runner, &self.name).await
