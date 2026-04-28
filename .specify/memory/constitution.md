@@ -33,6 +33,22 @@ Holds, bookmarks, snapshot creation, and similar operations are idempotent insid
 
 Unit tests must not invoke real `zfs(8)`. The `CommandRunner` trait has a `RecordingRunner` impl that returns canned outputs from JSON fixtures captured under `tests/fixtures/`. Smoke tests against a real zpool live behind a `--features integration` gate and are not run in CI by default. The acceptance test for any slice that touches a shared module is migrating one real callsite in archinstall_zfs.
 
+### VII. Two-Layer API: Free Functions + Entity Handles
+
+The crate exposes two parallel APIs over the same operations.
+
+The lower layer is **free functions** under `dataset/`, `pool/`, `encryption.rs` (e.g., `dataset::get_property(runner, ds, prop)`). These take a `&dyn CommandRunner` explicitly and own the parser/error-classification logic. All fixture-driven parser tests target this layer.
+
+The higher layer is **entity handles** in `engine.rs`: `Zfs` (top-level, holds an `Arc<dyn CommandRunner>`), `Pool` and `Dataset` (handles bound to a specific name). Methods on handles are thin delegations to the free functions. This is the recommended consumer entrypoint — `let zfs = palimpsest::Zfs::new(); zfs.dataset("tank").get_property("encryption").await` — because it stops callers from threading a runner+name through every call.
+
+The free-function layer stays `pub` deliberately: tests and consumers wanting explicit control should not have to go through a handle.
+
+### VIII. Single-Method Runner Trait
+
+`CommandRunner` has exactly one method: `async fn run(&self, cmd: Cmd) -> Result<Output, io::Error>`. `Cmd` is an owned, `Eq + Hash` value type carrying program, args, optional stdin bytes, and a secret-stdin flag (for redacting passphrases from `Display`/`Debug`). New execution-context axes (env, cwd, timeout) are added as `Cmd` fields, never as new trait methods. Streaming send/recv will add a sibling `spawn(Cmd) -> ChildHandle` method when that slice lands; both methods continue to take the same `Cmd`.
+
+This shape exists because keying `RecordingRunner` on the whole `Cmd` (including stdin) lets tests fixture distinct responses for the same `(program, args)` invoked with different stdin — e.g., `load-key` correct vs wrong passphrase. `tokio::process::Command` cannot serve this role because it isn't `Clone`/`Eq`/`Hash` and stdin bytes are written post-spawn rather than carried by the value.
+
 ## Scope and Non-Goals
 
 **In scope.** Linux OpenZFS ≥ 2.2. Datasets (list, get, set, create, destroy, snapshot, rollback, rename, mount, umount). Pools (list, status, create, import, export, set). Holds and bookmarks (idempotent). Send/recv with all the flag combinations zrepl uses (raw, properties, large blocks, compressed, embedded, replicate, resume). Resume token parsing and validation. Encryption status, key load/unload/change. Version and capability detection.
@@ -41,10 +57,23 @@ Unit tests must not invoke real `zfs(8)`. The `CommandRunner` trait has a `Recor
 
 ## Development Workflow
 
-Each operation lands as a self-contained slice under `specs/NNN-<name>/spec.md`. The slice includes API sketch, parser test plan, error classification cases, and an acceptance test that migrates one real callsite in archinstall_zfs (or, for replication-only operations, an integration test against a loopback zpool). Slices are merged in dependency order: foundation (runner, error, dataset/list) before everything else; pool/* and dataset extensions in parallel; hold/bookmark before send/recv; send/recv before replication driver consumers in arctern.
+Operations land as discrete commits guided by this constitution and the `specs/archinstall-zfs-migration-audit.md` reference. Per-slice spec documents under `specs/NNN-<name>/spec.md` were used for slices 001 and 002 and are kept as historical context, but the workflow is **deprecated** going forward. Reasons:
+
+- One-human + AI authoring: specs documented decisions both parties had already aligned on in conversation; the spec adds a commitment surface without adding cross-party signal.
+- Codebase is in early exploration where trait shapes still get redesigned end-to-end. Specs anchor decisions that haven't earned permanence.
+- Durable design rationale belongs in this constitution; slice-scoped acceptance criteria are best captured in commit messages, where they ride with the actual diff and don't decay separately.
+
+What replaces them:
+
+1. **Constitution** holds durable rulings (this document; amend as decisions are made or revisited).
+2. **Audit / intel docs** under `specs/` for captured external-system knowledge (`archinstall-zfs-migration-audit.md`). These don't decay because they describe systems we don't control.
+3. **Commit messages** carry the why for individual changes.
+4. **Free-function tests** with captured fixtures act as executable acceptance criteria.
+
+Slices are still merged in dependency order: foundation (runner, error, dataset/list) before everything else; pool/* and dataset extensions in parallel; hold/bookmark before send/recv; send/recv before replication driver consumers in arctern.
 
 ## Governance
 
 Pre-1.0. Breaking changes are allowed in any minor version. Once both consumers are stable on palimpsest, we cut 1.0 and switch to semver discipline. Amendments to this constitution are decided in PR review with explicit reference to which principle is being modified and why.
 
-**Version**: 0.1.0 | **Ratified**: 2026-04-27 | **Last Amended**: 2026-04-27
+**Version**: 0.2.0 | **Ratified**: 2026-04-27 | **Last Amended**: 2026-04-28
