@@ -36,7 +36,9 @@ pub async fn import(
     pool: &str,
     opts: &ImportOptions,
 ) -> Result<(), ZfsError> {
-    let output = runner.run(Cmd::new("zpool").args(opts.build_args(pool))).await?;
+    let output = runner
+        .run(Cmd::new("zpool").args(opts.build_args(pool)))
+        .await?;
     if output.status.success() {
         return Ok(());
     }

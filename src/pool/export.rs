@@ -23,7 +23,9 @@ pub async fn export(
     pool: &str,
     opts: &ExportOptions,
 ) -> Result<(), ZfsError> {
-    let output = runner.run(Cmd::new("zpool").args(opts.build_args(pool))).await?;
+    let output = runner
+        .run(Cmd::new("zpool").args(opts.build_args(pool)))
+        .await?;
     if output.status.success() {
         return Ok(());
     }

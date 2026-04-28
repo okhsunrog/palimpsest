@@ -133,13 +133,7 @@ impl RecordingRunner {
         }
     }
 
-    pub fn record(
-        mut self,
-        cmd: Cmd,
-        stdout: Vec<u8>,
-        stderr: Vec<u8>,
-        exit_code: i32,
-    ) -> Self {
+    pub fn record(mut self, cmd: Cmd, stdout: Vec<u8>, stderr: Vec<u8>, exit_code: i32) -> Self {
         self.responses
             .insert(cmd, make_output(stdout, stderr, exit_code));
         self
@@ -223,12 +217,8 @@ mod tests {
 
     #[tokio::test]
     async fn recording_runner_returns_fixture() {
-        let runner = RecordingRunner::new().record(
-            Cmd::new("echo").arg("hi"),
-            b"hi\n".to_vec(),
-            vec![],
-            0,
-        );
+        let runner =
+            RecordingRunner::new().record(Cmd::new("echo").arg("hi"), b"hi\n".to_vec(), vec![], 0);
         let out = runner.run(Cmd::new("echo").arg("hi")).await.unwrap();
         assert_eq!(out.stdout, b"hi\n");
         assert!(out.status.success());

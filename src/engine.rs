@@ -55,10 +55,7 @@ impl Zfs {
 
     /// List datasets across the system. Use a `Dataset` handle for
     /// single-dataset queries.
-    pub async fn list_datasets(
-        &self,
-        opts: &ListOptions,
-    ) -> Result<Vec<ZfsListEntry>, ZfsError> {
+    pub async fn list_datasets(&self, opts: &ListOptions) -> Result<Vec<ZfsListEntry>, ZfsError> {
         crate::dataset::list(&*self.runner, opts).await
     }
 }
@@ -155,7 +152,11 @@ mod tests {
             0,
         );
         let zfs = Zfs::with_runner(runner);
-        let prop = zfs.dataset("tank").get_property("encryption").await.unwrap();
+        let prop = zfs
+            .dataset("tank")
+            .get_property("encryption")
+            .await
+            .unwrap();
         assert_eq!(prop.value, "off");
     }
 
