@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
-use std::process::{Output, Stdio};
+use std::process::{ExitStatus, Output, Stdio};
 
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 /// A planned command invocation. Owned, builder-style.
 ///
@@ -83,9 +83,108 @@ impl fmt::Display for Cmd {
     }
 }
 
+impl fmt::Debug for ChildHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChildHandle")
+            .field("stdin", &self.stdin.is_some())
+            .field("stdout", &self.stdout.is_some())
+            .field("stderr", &self.stderr.is_some())
+            .finish()
+    }
+}
+
+/// An owned handle to a running child process. Returned by
+/// [`CommandRunner::spawn`].
+///
+/// The stdio streams are boxed trait objects so that both `RealRunner` (real
+/// `tokio::process::Child` handles) and `RecordingRunner` (in-memory cursors)
+/// can return the same type.
+///
+/// **Callers must consume `stdout`/`stderr` before (or concurrently with)
+/// calling `wait()`** to avoid deadlocking on the OS pipe buffer.
+pub struct ChildHandle {
+    /// Writable stdin. `None` if stdin was not piped (or for mock handles
+    /// where writes are silently discarded via `tokio::io::sink()`).
+    pub stdin: Option<Box<dyn AsyncWrite + Unpin + Send>>,
+    /// Readable stdout. For `zfs send`, this carries the byte stream.
+    pub stdout: Option<Box<dyn AsyncRead + Unpin + Send>>,
+    /// Readable stderr. For `zfs recv`, read this to detect resume tokens.
+    pub stderr: Option<Box<dyn AsyncRead + Unpin + Send>>,
+    inner: ChildWaiter,
+}
+
+enum ChildWaiter {
+    Process(tokio::process::Child),
+    Mock(i32),
+}
+
+impl ChildHandle {
+    fn from_process(mut child: tokio::process::Child) -> Self {
+        let stdin = child
+            .stdin
+            .take()
+            .map(|s| -> Box<dyn AsyncWrite + Unpin + Send> { Box::new(s) });
+        let stdout = child
+            .stdout
+            .take()
+            .map(|s| -> Box<dyn AsyncRead + Unpin + Send> { Box::new(s) });
+        let stderr = child
+            .stderr
+            .take()
+            .map(|s| -> Box<dyn AsyncRead + Unpin + Send> { Box::new(s) });
+        Self {
+            stdin,
+            stdout,
+            stderr,
+            inner: ChildWaiter::Process(child),
+        }
+    }
+
+    /// Creates a mock handle for use in `RecordingRunner` tests. Writes to
+    /// `stdin` are silently discarded; `stdout` and `stderr` replay the given
+    /// bytes.
+    pub(crate) fn mock(stdout: Vec<u8>, stderr: Vec<u8>, exit_code: i32) -> Self {
+        Self {
+            stdin: Some(Box::new(tokio::io::sink())),
+            stdout: Some(Box::new(std::io::Cursor::new(stdout))),
+            stderr: Some(Box::new(std::io::Cursor::new(stderr))),
+            inner: ChildWaiter::Mock(exit_code),
+        }
+    }
+
+    /// Wait for the child process to exit and return its exit status. Callers
+    /// must finish reading (or drop) `stdout`/`stderr` before calling this, or
+    /// run the reads concurrently on separate tasks, to avoid pipe deadlocks.
+    pub async fn wait(self) -> io::Result<ExitStatus> {
+        match self.inner {
+            ChildWaiter::Process(mut c) => c.wait().await,
+            ChildWaiter::Mock(code) => Ok(mock_exit_status(code)),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn mock_exit_status(code: i32) -> ExitStatus {
+    use std::os::unix::process::ExitStatusExt;
+    ExitStatus::from_raw((code & 0xff) << 8)
+}
+
 #[async_trait::async_trait]
 pub trait CommandRunner: Send + Sync {
     async fn run(&self, cmd: Cmd) -> Result<Output, io::Error>;
+
+    /// Spawn the command and return a [`ChildHandle`] with piped stdio. The
+    /// `Cmd.stdin` payload (if any) is ignored — use `child_handle.stdin` to
+    /// write after spawning. The default implementation returns an
+    /// `io::ErrorKind::Unsupported` error; override in runners that support
+    /// streaming.
+    async fn spawn(&self, cmd: Cmd) -> Result<ChildHandle, io::Error> {
+        let _ = cmd;
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "spawn not implemented for this CommandRunner",
+        ))
+    }
 }
 
 pub struct RealRunner;
@@ -113,6 +212,24 @@ impl CommandRunner for RealRunner {
             }
         }
     }
+
+    async fn spawn(&self, cmd: Cmd) -> Result<ChildHandle, io::Error> {
+        let mut command = tokio::process::Command::new(&cmd.program);
+        command
+            .args(&cmd.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let child = command.spawn()?;
+        Ok(ChildHandle::from_process(child))
+    }
+}
+
+/// Fixture record for spawn responses in `RecordingRunner`.
+struct SpawnFixture {
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+    exit_code: i32,
 }
 
 /// Keyed-by-`Cmd` mock runner. Tests call `record(cmd, stdout, stderr, code)`
@@ -124,18 +241,35 @@ impl CommandRunner for RealRunner {
 /// distinguish, e.g., `load-key` with correct vs wrong passphrase.
 pub struct RecordingRunner {
     responses: HashMap<Cmd, Output>,
+    spawn_responses: HashMap<Cmd, SpawnFixture>,
 }
 
 impl RecordingRunner {
     pub fn new() -> Self {
         Self {
             responses: HashMap::new(),
+            spawn_responses: HashMap::new(),
         }
     }
 
     pub fn record(mut self, cmd: Cmd, stdout: Vec<u8>, stderr: Vec<u8>, exit_code: i32) -> Self {
         self.responses
             .insert(cmd, make_output(stdout, stderr, exit_code));
+        self
+    }
+
+    /// Install a spawn fixture: when `spawn(cmd)` is called, returns a
+    /// `ChildHandle` whose stdout/stderr replay the given bytes and whose
+    /// `wait()` returns the given exit code. Stdin writes are discarded.
+    pub fn record_spawn(
+        mut self,
+        cmd: Cmd,
+        stdout: Vec<u8>,
+        stderr: Vec<u8>,
+        exit_code: i32,
+    ) -> Self {
+        self.spawn_responses
+            .insert(cmd, SpawnFixture { stdout, stderr, exit_code });
         self
     }
 }
@@ -154,6 +288,16 @@ impl CommandRunner for RecordingRunner {
             None => Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 format!("RecordingRunner: no fixture for `{cmd}`"),
+            )),
+        }
+    }
+
+    async fn spawn(&self, cmd: Cmd) -> Result<ChildHandle, io::Error> {
+        match self.spawn_responses.get(&cmd) {
+            Some(f) => Ok(ChildHandle::mock(f.stdout.clone(), f.stderr.clone(), f.exit_code)),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("RecordingRunner: no spawn fixture for `{cmd}`"),
             )),
         }
     }
@@ -275,5 +419,68 @@ mod tests {
             .expect_err("unmatched call must error");
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
         assert!(err.to_string().contains("zfs list"));
+    }
+
+    #[tokio::test]
+    async fn spawn_fixture_streams_stdout_and_waits() {
+        use tokio::io::AsyncReadExt;
+
+        let runner = RecordingRunner::new().record_spawn(
+            Cmd::new("zfs").args(["send", "tank/data@snap1"]),
+            b"stream-data".to_vec(),
+            vec![],
+            0,
+        );
+        let mut handle = runner
+            .spawn(Cmd::new("zfs").args(["send", "tank/data@snap1"]))
+            .await
+            .unwrap();
+        let mut buf = Vec::new();
+        handle
+            .stdout
+            .as_mut()
+            .unwrap()
+            .read_to_end(&mut buf)
+            .await
+            .unwrap();
+        assert_eq!(buf, b"stream-data");
+        let status = handle.wait().await.unwrap();
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn spawn_unmatched_returns_not_found() {
+        let runner = RecordingRunner::new();
+        let err = runner
+            .spawn(Cmd::new("zfs").args(["send", "tank/data@snap1"]))
+            .await
+            .expect_err("unmatched spawn must error");
+        assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[tokio::test]
+    async fn spawn_mock_stdin_accepts_writes() {
+        use tokio::io::AsyncWriteExt;
+
+        let runner = RecordingRunner::new().record_spawn(
+            Cmd::new("zfs").args(["recv", "tank/data"]),
+            vec![],
+            vec![],
+            0,
+        );
+        let mut handle = runner
+            .spawn(Cmd::new("zfs").args(["recv", "tank/data"]))
+            .await
+            .unwrap();
+        // Writes succeed (data is discarded by tokio::io::sink()).
+        handle
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(b"fake-stream-data")
+            .await
+            .unwrap();
+        let status = handle.wait().await.unwrap();
+        assert!(status.success());
     }
 }
