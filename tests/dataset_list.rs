@@ -1,5 +1,5 @@
 use palimpsest::dataset::{DatasetType, ListOptions, list};
-use palimpsest::{RecordingRunner, ZfsError};
+use palimpsest::{Cmd, RecordingRunner, ZfsError};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -9,8 +9,7 @@ fn fixture(name: &str) -> Vec<u8> {
 #[tokio::test]
 async fn list_simple_returns_one_filesystem() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["list", "-j", "-p", "tank"],
+        Cmd::new("zfs").args(["list", "-j", "-p", "tank"]),
         fixture("dataset_list_simple.json"),
         vec![],
         0,
@@ -30,8 +29,7 @@ async fn list_simple_returns_one_filesystem() {
 #[tokio::test]
 async fn list_recursive_with_depth() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["list", "-j", "-p", "-r", "-d", "2", "tank"],
+        Cmd::new("zfs").args(["list", "-j", "-p", "-r", "-d", "2", "tank"]),
         fixture("dataset_list_recursive.json"),
         vec![],
         0,
@@ -52,9 +50,6 @@ async fn list_recursive_with_depth() {
 
 #[tokio::test]
 async fn list_mixed_types_separates_kinds() {
-    // Fixture was captured with `-t all`; our build_args emits the four types
-    // comma-joined in declaration order. The RecordingRunner key matches the
-    // emitted command line.
     let opts = ListOptions {
         recursive: true,
         depth: Some(2),
@@ -68,8 +63,7 @@ async fn list_mixed_types_separates_kinds() {
         ..Default::default()
     };
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &[
+        Cmd::new("zfs").args([
             "list",
             "-j",
             "-p",
@@ -79,7 +73,7 @@ async fn list_mixed_types_separates_kinds() {
             "-t",
             "filesystem,volume,snapshot,bookmark",
             "tank/data/home",
-        ],
+        ]),
         fixture("dataset_list_mixed.json"),
         vec![],
         0,
@@ -123,8 +117,7 @@ async fn list_mixed_types_separates_kinds() {
 #[tokio::test]
 async fn list_returns_typed_error_on_missing_dataset() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["list", "-j", "-p", "tank/missing"],
+        Cmd::new("zfs").args(["list", "-j", "-p", "tank/missing"]),
         vec![],
         b"cannot open 'tank/missing': dataset does not exist\n".to_vec(),
         1,

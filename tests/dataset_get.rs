@@ -1,6 +1,6 @@
 use palimpsest::dataset::{GetOptions, get, get_property};
 use palimpsest::models::PropertySourceKind;
-use palimpsest::{RecordingRunner, ZfsError};
+use palimpsest::{Cmd, RecordingRunner, ZfsError};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -10,8 +10,7 @@ fn fixture(name: &str) -> Vec<u8> {
 #[tokio::test]
 async fn get_property_returns_off_for_unencrypted_pool() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["get", "-j", "-p", "encryption", "tank"],
+        Cmd::new("zfs").args(["get", "-j", "-p", "encryption", "tank"]),
         fixture("dataset_get_encryption_off.json"),
         vec![],
         0,
@@ -26,8 +25,7 @@ async fn get_property_returns_off_for_unencrypted_pool() {
 #[tokio::test]
 async fn get_property_returns_aes_for_encrypted_dataset() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["get", "-j", "-p", "encryption", "tank/encrypted"],
+        Cmd::new("zfs").args(["get", "-j", "-p", "encryption", "tank/encrypted"]),
         fixture("dataset_get_encryption_on.json"),
         vec![],
         0,
@@ -41,14 +39,13 @@ async fn get_property_returns_aes_for_encrypted_dataset() {
 #[tokio::test]
 async fn get_batch_returns_all_requested_properties() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &[
+        Cmd::new("zfs").args([
             "get",
             "-j",
             "-p",
             "encryption,keystatus,keyformat,keylocation",
             "tank/encrypted",
-        ],
+        ]),
         fixture("dataset_get_encryption_batch.json"),
         vec![],
         0,
@@ -75,8 +72,7 @@ async fn get_batch_returns_all_requested_properties() {
 #[tokio::test]
 async fn get_recursive_returns_multiple_entries() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["get", "-j", "-p", "-r", "mountpoint,used", "tank"],
+        Cmd::new("zfs").args(["get", "-j", "-p", "-r", "mountpoint,used", "tank"]),
         fixture("dataset_get_recursive.json"),
         vec![],
         0,
@@ -105,8 +101,7 @@ async fn get_recursive_returns_multiple_entries() {
 #[tokio::test]
 async fn get_source_filter_returns_only_local_properties() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["get", "-j", "-p", "-s", "local", "all", "tank/data"],
+        Cmd::new("zfs").args(["get", "-j", "-p", "-s", "local", "all", "tank/data"]),
         fixture("dataset_get_source_local.json"),
         vec![],
         0,
@@ -133,8 +128,7 @@ async fn get_source_filter_returns_only_local_properties() {
 #[tokio::test]
 async fn get_returns_typed_error_on_missing_dataset() {
     let runner = RecordingRunner::new().record(
-        "zfs",
-        &["get", "-j", "-p", "encryption", "tank/missing"],
+        Cmd::new("zfs").args(["get", "-j", "-p", "encryption", "tank/missing"]),
         vec![],
         b"cannot open 'tank/missing': dataset does not exist\n".to_vec(),
         1,

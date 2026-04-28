@@ -1,6 +1,6 @@
 use crate::error::{ZfsError, classify_stderr};
 use crate::models::{DatasetType, PropertySourceKind, PropertyValue, ZfsGetEntry, ZfsGetOutput};
-use crate::runner::CommandRunner;
+use crate::runner::{Cmd, CommandRunner};
 
 #[derive(Default, Clone, Debug)]
 pub struct GetOptions {
@@ -65,8 +65,7 @@ pub async fn get(
     opts: &GetOptions,
 ) -> Result<Vec<ZfsGetEntry>, ZfsError> {
     let args = opts.build_args()?;
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let output = runner.run("zfs", &arg_refs).await?;
+    let output = runner.run(Cmd::new("zfs").args(args)).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(classify_stderr(&stderr, output.status.code()));

@@ -1,5 +1,5 @@
 use crate::error::{ZfsError, classify_stderr};
-use crate::runner::CommandRunner;
+use crate::runner::{Cmd, CommandRunner};
 
 #[derive(Default, Clone, Debug)]
 pub struct ExportOptions {
@@ -23,9 +23,7 @@ pub async fn export(
     pool: &str,
     opts: &ExportOptions,
 ) -> Result<(), ZfsError> {
-    let args = opts.build_args(pool);
-    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let output = runner.run("zpool", &arg_refs).await?;
+    let output = runner.run(Cmd::new("zpool").args(opts.build_args(pool))).await?;
     if output.status.success() {
         return Ok(());
     }

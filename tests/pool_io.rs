@@ -1,10 +1,14 @@
 use palimpsest::pool::{ExportOptions, ImportOptions, export, import};
-use palimpsest::{RecordingRunner, ZfsError};
+use palimpsest::{Cmd, RecordingRunner, ZfsError};
 
 #[tokio::test]
 async fn import_returns_ok_on_success() {
-    let runner =
-        RecordingRunner::new().record("zpool", &["import", "-f", "-N", "tank"], vec![], vec![], 0);
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zpool").args(["import", "-f", "-N", "tank"]),
+        vec![],
+        vec![],
+        0,
+    );
     let opts = ImportOptions {
         force: true,
         no_mount: true,
@@ -18,8 +22,7 @@ async fn import_returns_ok_on_success() {
 #[tokio::test]
 async fn import_classifies_pool_not_found() {
     let runner = RecordingRunner::new().record(
-        "zpool",
-        &["import", "tank"],
+        Cmd::new("zpool").args(["import", "tank"]),
         vec![],
         b"cannot import 'tank': no such pool available\n".to_vec(),
         1,
@@ -35,7 +38,12 @@ async fn import_classifies_pool_not_found() {
 
 #[tokio::test]
 async fn export_returns_ok_on_success() {
-    let runner = RecordingRunner::new().record("zpool", &["export", "tank"], vec![], vec![], 0);
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zpool").args(["export", "tank"]),
+        vec![],
+        vec![],
+        0,
+    );
     export(&runner, "tank", &ExportOptions::default())
         .await
         .expect("export succeeds");
@@ -43,8 +51,12 @@ async fn export_returns_ok_on_success() {
 
 #[tokio::test]
 async fn export_force_passes_dash_f() {
-    let runner =
-        RecordingRunner::new().record("zpool", &["export", "-f", "tank"], vec![], vec![], 0);
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zpool").args(["export", "-f", "tank"]),
+        vec![],
+        vec![],
+        0,
+    );
     let opts = ExportOptions { force: true };
     export(&runner, "tank", &opts)
         .await
