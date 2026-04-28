@@ -123,6 +123,12 @@ impl Zfs {
     pub async fn unmount_all(&self, force: bool) -> Result<(), ZfsError> {
         crate::dataset::unmount_all(&*self.runner, force).await
     }
+
+    /// `zfs destroy <bookmark>` — destroy a bookmark by its full name
+    /// (e.g., `"tank/data#bm1"`).
+    pub async fn destroy_bookmark(&self, bookmark_name: &str) -> Result<(), ZfsError> {
+        crate::bookmark::destroy(&*self.runner, bookmark_name).await
+    }
 }
 
 impl Default for Zfs {
@@ -342,6 +348,28 @@ impl Dataset {
             runner: self.runner.clone(),
             name: full_name,
         })
+    }
+
+    /// `zfs hold <tag> <snapshot>`. Idempotent on already-held.
+    pub async fn hold(&self, tag: &str) -> Result<(), ZfsError> {
+        crate::hold::hold(&*self.runner, &self.name, tag).await
+    }
+
+    /// `zfs release <tag> <snapshot>`. Not idempotent.
+    pub async fn release(&self, tag: &str) -> Result<(), ZfsError> {
+        crate::hold::release(&*self.runner, &self.name, tag).await
+    }
+
+    /// `zfs holds -H <snapshot>` — list user holds on this snapshot.
+    pub async fn list_holds(&self) -> Result<Vec<crate::hold::Hold>, ZfsError> {
+        crate::hold::list_holds(&*self.runner, &self.name).await
+    }
+
+    /// `zfs bookmark <self> <bookmark_name>` — create a bookmark from this
+    /// snapshot. `bookmark_name` is the full ZFS bookmark name
+    /// (e.g., `"tank/data#bm1"`). Idempotent on already-existing bookmark.
+    pub async fn bookmark(&self, bookmark_name: &str) -> Result<(), ZfsError> {
+        crate::bookmark::create(&*self.runner, &self.name, bookmark_name).await
     }
 }
 
