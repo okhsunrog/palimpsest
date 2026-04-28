@@ -1,0 +1,22 @@
+   pool: tank
+     id: 9316430153991325696
+  state: ONLINE
+ action: The pool can be imported using its name or numeric identifier.
+ config:
+
+	tank             ONLINE
+	  /tmp/tank.img  ONLINE
+
+   pool: backup
+     id: 1234567890123456789
+  state: DEGRADED
+ status: One or more devices could not be opened.  Sufficient replicas exist for
+	the pool to continue functioning in a degraded state.
+ action: Attach the missing device and online it using 'zpool online'.
+ config:
+
+	backup           DEGRADED
+	  mirror-0       DEGRADED
+	    /dev/sda     ONLINE
+	    /dev/sdb     UNAVAIL
+

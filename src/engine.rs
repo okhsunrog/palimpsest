@@ -20,7 +20,7 @@ use crate::dataset::{
 use crate::error::ZfsError;
 use crate::models::{PropertyValue, ZpoolGetEntry, ZpoolListEntry, ZpoolStatusEntry};
 use crate::pool::{
-    DestroyOptions, ExportOptions, GetOptions as PoolGetOptions, ImportOptions,
+    DestroyOptions, DiscoveredPool, ExportOptions, GetOptions as PoolGetOptions, ImportOptions,
     ListOptions as PoolListOptions, PoolCreateOptions,
 };
 use crate::runner::{CommandRunner, RealRunner};
@@ -79,6 +79,12 @@ impl Zfs {
     /// `zpool status -j` for all pools.
     pub async fn pool_status_all(&self) -> Result<Vec<ZpoolStatusEntry>, ZfsError> {
         crate::pool::status_all(&*self.runner).await
+    }
+
+    /// `zpool import` (no args) — discover pools available for import.
+    /// Returns an empty Vec when no pools are visible.
+    pub async fn discover_importable_pools(&self) -> Result<Vec<DiscoveredPool>, ZfsError> {
+        crate::pool::discover(&*self.runner).await
     }
 
     /// Create a new pool. Returns a [`Pool`] handle to the just-created pool.

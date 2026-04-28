@@ -1,5 +1,6 @@
 pub mod create;
 pub mod destroy;
+pub mod discover;
 pub mod export;
 pub mod get;
 pub mod import;
@@ -9,6 +10,7 @@ pub mod status;
 
 pub use create::{PoolCreateOptions, RaidZLevel, Vdev, create};
 pub use destroy::{DestroyOptions, destroy};
+pub use discover::{DiscoveredPool, discover, parse_discovery};
 pub use export::{ExportOptions, export};
 pub use get::{GetOptions, get, get_property};
 pub use import::{ImportOptions, import};
