@@ -18,8 +18,11 @@ use crate::dataset::{
     CreateOptions, GetOptions, ListOptions, MountOptions, UnmountOptions, ZfsGetEntry, ZfsListEntry,
 };
 use crate::error::ZfsError;
-use crate::models::PropertyValue;
-use crate::pool::{ExportOptions, ImportOptions};
+use crate::models::{PropertyValue, ZpoolGetEntry, ZpoolListEntry, ZpoolStatusEntry};
+use crate::pool::{
+    DestroyOptions, ExportOptions, GetOptions as PoolGetOptions, ImportOptions,
+    ListOptions as PoolListOptions, PoolCreateOptions,
+};
 use crate::runner::{CommandRunner, RealRunner};
 
 /// Top-level handle. Construct once with [`Zfs::new`] (uses the system's
@@ -65,6 +68,28 @@ impl Zfs {
         crate::dataset::list(&*self.runner, opts).await
     }
 
+    /// List pools imported on the system.
+    pub async fn list_pools(
+        &self,
+        opts: &PoolListOptions,
+    ) -> Result<Vec<ZpoolListEntry>, ZfsError> {
+        crate::pool::list(&*self.runner, opts).await
+    }
+
+    /// `zpool status -j` for all pools.
+    pub async fn pool_status_all(&self) -> Result<Vec<ZpoolStatusEntry>, ZfsError> {
+        crate::pool::status_all(&*self.runner).await
+    }
+
+    /// Create a new pool. Returns a [`Pool`] handle to the just-created pool.
+    pub async fn create_pool(&self, opts: &PoolCreateOptions) -> Result<Pool, ZfsError> {
+        crate::pool::create(&*self.runner, opts).await?;
+        Ok(Pool {
+            runner: self.runner.clone(),
+            name: opts.name.clone(),
+        })
+    }
+
     /// `zfs mount -a` — mount all importable filesystems on the system.
     pub async fn mount_all(&self) -> Result<(), ZfsError> {
         crate::dataset::mount_all(&*self.runner).await
@@ -99,6 +124,48 @@ impl Pool {
 
     pub async fn export(&self, opts: &ExportOptions) -> Result<(), ZfsError> {
         crate::pool::export(&*self.runner, &self.name, opts).await
+    }
+
+    /// `zpool destroy [-f] <pool>`. Permanent.
+    pub async fn destroy(&self, opts: &DestroyOptions) -> Result<(), ZfsError> {
+        crate::pool::destroy(&*self.runner, &self.name, opts).await
+    }
+
+    /// Read multiple properties via `zpool get -j`. The `pools` field of
+    /// `opts` is overridden with this handle's name.
+    pub async fn get(&self, opts: &PoolGetOptions) -> Result<Vec<ZpoolGetEntry>, ZfsError> {
+        let mut opts = opts.clone();
+        opts.pools = vec![self.name.clone()];
+        crate::pool::get(&*self.runner, &opts).await
+    }
+
+    /// Read a single pool property.
+    pub async fn get_property(&self, property: &str) -> Result<PropertyValue, ZfsError> {
+        crate::pool::get_property(&*self.runner, &self.name, property).await
+    }
+
+    /// `zpool set <name>=<value> <pool>`.
+    pub async fn set_property(&self, property: &str, value: &str) -> Result<(), ZfsError> {
+        crate::pool::set_property(&*self.runner, &self.name, property, value).await
+    }
+
+    /// `zpool status -j <pool>`.
+    pub async fn status(&self) -> Result<ZpoolStatusEntry, ZfsError> {
+        crate::pool::status(&*self.runner, &self.name).await
+    }
+
+    /// Returns true if `zpool list` of this pool succeeds with at least
+    /// one entry. Errors collapse to false, matching the common
+    /// "is this pool imported and visible?" use.
+    pub async fn exists(&self) -> bool {
+        let opts = PoolListOptions {
+            pools: vec![self.name.clone()],
+            ..Default::default()
+        };
+        crate::pool::list(&*self.runner, &opts)
+            .await
+            .map(|entries| !entries.is_empty())
+            .unwrap_or(false)
     }
 
     /// Handle to the pool's root filesystem (the zfs dataset whose name
