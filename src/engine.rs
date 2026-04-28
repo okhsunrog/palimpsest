@@ -192,6 +192,19 @@ impl Pool {
             .unwrap_or(false)
     }
 
+    /// Best-effort encryption check via an ephemeral `import -fN` on the
+    /// pool's root dataset. See [`crate::encryption::is_pool_encrypted`].
+    pub async fn is_encrypted(&self) -> Result<bool, ZfsError> {
+        crate::encryption::is_pool_encrypted(&*self.runner, &self.name).await
+    }
+
+    /// Best-effort passphrase verification via an ephemeral import +
+    /// `load-key` with the passphrase piped on stdin. See
+    /// [`crate::encryption::verify_pool_passphrase`].
+    pub async fn verify_passphrase(&self, passphrase: &[u8]) -> Result<bool, ZfsError> {
+        crate::encryption::verify_pool_passphrase(&*self.runner, &self.name, passphrase).await
+    }
+
     /// Handle to the pool's root filesystem (the zfs dataset whose name
     /// matches the pool name). Encryption properties of a pool actually
     /// live on this dataset.
@@ -511,6 +524,164 @@ mod tests {
         zfs.unmount_all(true)
             .await
             .expect("unmount_all force succeeds");
+    }
+
+    #[tokio::test]
+    async fn pool_is_encrypted_true() {
+        let runner = RecordingRunner::new()
+            .record(
+                Cmd::new("zpool").args(["import", "-f", "-N", "tank"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["get", "-j", "-p", "encryption", "tank"]),
+                get_property_json("tank", "aes-256-gcm", "LOCAL"),
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["unload-key", "tank"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zpool").args(["export", "tank"]),
+                vec![],
+                vec![],
+                0,
+            );
+        let zfs = Zfs::with_runner(runner);
+        assert!(zfs.pool("tank").is_encrypted().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pool_is_encrypted_false() {
+        let runner = RecordingRunner::new()
+            .record(
+                Cmd::new("zpool").args(["import", "-f", "-N", "tank"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["get", "-j", "-p", "encryption", "tank"]),
+                get_property_json("tank", "off", "DEFAULT"),
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["unload-key", "tank"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zpool").args(["export", "tank"]),
+                vec![],
+                vec![],
+                0,
+            );
+        let zfs = Zfs::with_runner(runner);
+        assert!(!zfs.pool("tank").is_encrypted().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn pool_is_encrypted_import_error_propagates() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zpool").args(["import", "-f", "-N", "missing"]),
+            vec![],
+            b"cannot import 'missing': no such pool available\n".to_vec(),
+            1,
+        );
+        let zfs = Zfs::with_runner(runner);
+        let err = zfs.pool("missing").is_encrypted().await.unwrap_err();
+        assert!(matches!(err, ZfsError::PoolNotFound { .. }));
+    }
+
+    #[tokio::test]
+    async fn pool_verify_passphrase_correct() {
+        let runner = RecordingRunner::new()
+            .record(
+                Cmd::new("zpool").args(["import", "-f", "-N", "tank"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["unload-key", "tank"]),
+                vec![],
+                b"Key unload error: Key already unloaded for 'tank'.\n".to_vec(),
+                255,
+            )
+            .record(
+                Cmd::new("zfs")
+                    .args(["load-key", "tank"])
+                    .stdin_secret(b"correct".to_vec()),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["unload-key", "tank"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zpool").args(["export", "tank"]),
+                vec![],
+                vec![],
+                0,
+            );
+        let zfs = Zfs::with_runner(runner);
+        assert!(
+            zfs.pool("tank")
+                .verify_passphrase(b"correct")
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_verify_passphrase_wrong() {
+        let runner = RecordingRunner::new()
+            .record(
+                Cmd::new("zpool").args(["import", "-f", "-N", "tank"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["unload-key", "tank"]),
+                vec![],
+                b"Key unload error: Key already unloaded for 'tank'.\n".to_vec(),
+                255,
+            )
+            .record(
+                Cmd::new("zfs")
+                    .args(["load-key", "tank"])
+                    .stdin_secret(b"wrong".to_vec()),
+                vec![],
+                b"Key load error: Incorrect key provided for 'tank'.\n".to_vec(),
+                1,
+            )
+            .record(
+                Cmd::new("zfs").args(["unload-key", "tank"]),
+                vec![],
+                b"Key unload error: Key already unloaded for 'tank'.\n".to_vec(),
+                255,
+            )
+            .record(
+                Cmd::new("zpool").args(["export", "tank"]),
+                vec![],
+                vec![],
+                0,
+            );
+        let zfs = Zfs::with_runner(runner);
+        assert!(!zfs.pool("tank").verify_passphrase(b"wrong").await.unwrap());
     }
 
     #[tokio::test]
