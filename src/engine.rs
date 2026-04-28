@@ -96,6 +96,24 @@ impl Zfs {
         })
     }
 
+    /// Create a dataset by absolute name (e.g., `"tank/data/home"`). Convenience
+    /// for callers that have full paths and don't want to navigate via a
+    /// `Pool` or `Dataset` handle. Equivalent to looking up the parent and
+    /// calling `pool.create_dataset(rel)` / `dataset.create_dataset(rel)`,
+    /// but lets the caller skip the split.
+    pub async fn create_dataset(
+        &self,
+        abs_name: impl Into<String>,
+        opts: &CreateOptions,
+    ) -> Result<Dataset, ZfsError> {
+        let name = abs_name.into();
+        crate::dataset::create(&*self.runner, &name, opts).await?;
+        Ok(Dataset {
+            runner: self.runner.clone(),
+            name,
+        })
+    }
+
     /// `zfs mount -a` — mount all importable filesystems on the system.
     pub async fn mount_all(&self) -> Result<(), ZfsError> {
         crate::dataset::mount_all(&*self.runner).await
@@ -381,6 +399,25 @@ mod tests {
             .await
             .expect("create_dataset succeeds");
         assert_eq!(ds.name(), "tank/data");
+    }
+
+    #[tokio::test]
+    async fn zfs_create_dataset_takes_absolute_name() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["create", "-o", "compression=lz4", "tank/data/home"]),
+            vec![],
+            vec![],
+            0,
+        );
+        let zfs = Zfs::with_runner(runner);
+        let ds = zfs
+            .create_dataset(
+                "tank/data/home",
+                &CreateOptions::new().property("compression", "lz4"),
+            )
+            .await
+            .expect("create_dataset by abs name succeeds");
+        assert_eq!(ds.name(), "tank/data/home");
     }
 
     #[tokio::test]
