@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use thiserror::Error;
 
 use crate::error::ZfsError;
@@ -31,6 +33,13 @@ pub struct RecvArgs {
     /// `-e` — strip everything but the last component of the sending dataset's
     /// name, appending it to the target.
     pub exclude_first_component: bool,
+    /// `-o property=value` overrides emitted in deterministic key order so
+    /// the wire arglist is reproducible (helps fixture-based tests and
+    /// makes diffs of recorded commands meaningful).
+    pub properties_override: BTreeMap<String, String>,
+    /// `-x property` — drop the named property from the incoming stream so
+    /// the receiver inherits its parent's value.
+    pub properties_inherit: Vec<String>,
 }
 
 impl RecvArgs {
@@ -41,6 +50,8 @@ impl RecvArgs {
             unmounted: false,
             discard_first_component: false,
             exclude_first_component: false,
+            properties_override: BTreeMap::new(),
+            properties_inherit: Vec::new(),
         }
     }
 
@@ -50,6 +61,14 @@ impl RecvArgs {
     }
     pub fn unmounted(mut self) -> Self {
         self.unmounted = true;
+        self
+    }
+    pub fn property_override(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.properties_override.insert(key.into(), value.into());
+        self
+    }
+    pub fn property_inherit(mut self, key: impl Into<String>) -> Self {
+        self.properties_inherit.push(key.into());
         self
     }
 
@@ -66,6 +85,14 @@ impl RecvArgs {
         }
         if self.exclude_first_component {
             args.push("-e".to_string());
+        }
+        for (k, v) in &self.properties_override {
+            args.push("-o".to_string());
+            args.push(format!("{k}={v}"));
+        }
+        for k in &self.properties_inherit {
+            args.push("-x".to_string());
+            args.push(k.clone());
         }
         args.push(self.target.clone());
         args
@@ -201,6 +228,30 @@ mod tests {
     fn build_args_flags() {
         let args = RecvArgs::new("tank/replica").force_rollback().unmounted();
         assert_eq!(args.build_args(), vec!["recv", "-F", "-u", "tank/replica"]);
+    }
+
+    #[test]
+    fn build_args_property_override_and_inherit() {
+        // Inserted out of alphabetical order to confirm BTreeMap sort.
+        let args = RecvArgs::new("tank/replica")
+            .unmounted()
+            .property_override("readonly", "on")
+            .property_override("canmount", "off")
+            .property_inherit("mountpoint");
+        assert_eq!(
+            args.build_args(),
+            vec![
+                "recv",
+                "-u",
+                "-o",
+                "canmount=off",
+                "-o",
+                "readonly=on",
+                "-x",
+                "mountpoint",
+                "tank/replica"
+            ]
+        );
     }
 
     #[tokio::test]
