@@ -17,6 +17,12 @@ pub enum ZfsError {
     #[error("snapshot is held: {name}")]
     SnapshotHeld { name: String },
 
+    #[error("snapshot already exists: {name}")]
+    SnapshotExists { name: String },
+
+    #[error("encryption key not loaded{}", name.as_deref().map(|n| format!(" for {n}")).unwrap_or_default())]
+    KeyNotLoaded { name: Option<String> },
+
     #[error("pool not found: {name}")]
     PoolNotFound { name: String },
 
@@ -56,6 +62,26 @@ fn snapshot_held_re() -> &'static Regex {
     })
 }
 
+fn snapshot_exists_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"cannot create snapshot '([^']+)': dataset already exists")
+            .expect("snapshot_exists regex compiles")
+    })
+}
+
+fn key_not_loaded_named_re() -> &'static Regex {
+    // OpenZFS canonical form when an encrypted dataset is operated on without
+    // its key: `Key must be loaded for 'tank/encrypted'.`
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"Key must be loaded for '([^']+)'")
+            .expect("key_not_loaded_named regex compiles")
+    })
+}
+
+const KEY_NOT_LOADED_MARKER: &str = "Key must be loaded";
+
 fn pool_not_found_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -79,6 +105,19 @@ pub fn classify_stderr(stderr: &str, exit_code: Option<i32>) -> ZfsError {
         return ZfsError::SnapshotHeld {
             name: caps[1].to_string(),
         };
+    }
+    if let Some(caps) = snapshot_exists_re().captures(stderr) {
+        return ZfsError::SnapshotExists {
+            name: caps[1].to_string(),
+        };
+    }
+    if let Some(caps) = key_not_loaded_named_re().captures(stderr) {
+        return ZfsError::KeyNotLoaded {
+            name: Some(caps[1].to_string()),
+        };
+    }
+    if stderr.contains(KEY_NOT_LOADED_MARKER) {
+        return ZfsError::KeyNotLoaded { name: None };
     }
     if let Some(caps) = busy_re().captures(stderr) {
         return ZfsError::Busy {
@@ -151,6 +190,40 @@ mod tests {
             panic!("expected SnapshotHeld, got {err:?}");
         };
         assert_eq!(name, "tank/data/home@snap1");
+    }
+
+    #[test]
+    fn classifies_snapshot_exists() {
+        let err = classify_stderr(
+            "cannot create snapshot 'tank/data@snap1': dataset already exists\n",
+            Some(1),
+        );
+        let ZfsError::SnapshotExists { name } = err else {
+            panic!("expected SnapshotExists, got {err:?}");
+        };
+        assert_eq!(name, "tank/data@snap1");
+    }
+
+    #[test]
+    fn classifies_key_not_loaded_named() {
+        let err = classify_stderr(
+            "Key must be loaded for 'tank/encrypted'.\n",
+            Some(1),
+        );
+        let ZfsError::KeyNotLoaded { name } = err else {
+            panic!("expected KeyNotLoaded, got {err:?}");
+        };
+        assert_eq!(name.as_deref(), Some("tank/encrypted"));
+    }
+
+    #[test]
+    fn classifies_key_not_loaded_unnamed_falls_back() {
+        // Hypothetical short form without the dataset name in the message.
+        let err = classify_stderr("Key must be loaded.\n", Some(1));
+        let ZfsError::KeyNotLoaded { name } = err else {
+            panic!("expected KeyNotLoaded, got {err:?}");
+        };
+        assert_eq!(name, None);
     }
 
     #[test]
