@@ -8,6 +8,10 @@ use crate::runner::{Cmd, CommandRunner};
 pub struct CreateOptions {
     /// Properties to apply via `-o name=value` at creation time.
     pub properties: Vec<(String, String)>,
+    /// `-p` — create any missing parent datasets, idempotent on existing
+    /// parents. The leaf still errors if it already exists; combine with
+    /// caller-side "already exists" tolerance for full idempotency.
+    pub create_parents: bool,
 }
 
 impl CreateOptions {
@@ -31,8 +35,16 @@ impl CreateOptions {
         self
     }
 
+    pub fn create_parents(mut self) -> Self {
+        self.create_parents = true;
+        self
+    }
+
     pub fn build_args(&self, name: &str) -> Vec<String> {
         let mut args: Vec<String> = vec!["create".into()];
+        if self.create_parents {
+            args.push("-p".into());
+        }
         for (k, v) in &self.properties {
             args.push("-o".into());
             args.push(format!("{k}={v}"));
@@ -67,6 +79,12 @@ mod tests {
     fn build_args_no_properties() {
         let opts = CreateOptions::new();
         assert_eq!(opts.build_args("tank/data"), vec!["create", "tank/data"]);
+    }
+
+    #[test]
+    fn build_args_with_create_parents() {
+        let opts = CreateOptions::new().create_parents();
+        assert_eq!(opts.build_args("tank/a/b/c"), vec!["create", "-p", "tank/a/b/c"]);
     }
 
     #[test]
