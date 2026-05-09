@@ -14,6 +14,9 @@ pub enum ZfsError {
     #[error("dataset is busy: {name}")]
     Busy { name: String },
 
+    #[error("snapshot is held: {name}")]
+    SnapshotHeld { name: String },
+
     #[error("pool not found: {name}")]
     PoolNotFound { name: String },
 
@@ -45,6 +48,14 @@ fn busy_re() -> &'static Regex {
     })
 }
 
+fn snapshot_held_re() -> &'static Regex {
+    static R: OnceLock<Regex> = OnceLock::new();
+    R.get_or_init(|| {
+        Regex::new(r"cannot destroy snapshot ([^:]+): it's being held")
+            .expect("snapshot_held regex compiles")
+    })
+}
+
 fn pool_not_found_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -61,6 +72,11 @@ pub fn classify_stderr(stderr: &str, exit_code: Option<i32>) -> ZfsError {
     }
     if let Some(caps) = dataset_not_found_re().captures(stderr) {
         return ZfsError::DatasetNotFound {
+            name: caps[1].to_string(),
+        };
+    }
+    if let Some(caps) = snapshot_held_re().captures(stderr) {
+        return ZfsError::SnapshotHeld {
             name: caps[1].to_string(),
         };
     }
@@ -122,6 +138,19 @@ mod tests {
             panic!("expected Busy");
         };
         assert_eq!(name, "tank/foo");
+    }
+
+    #[test]
+    fn classifies_snapshot_held() {
+        let err = classify_stderr(
+            "cannot destroy snapshot tank/data/home@snap1: it's being held. \
+             Run 'zfs holds -r tank/data/home@snap1' to see holders.\n",
+            Some(1),
+        );
+        let ZfsError::SnapshotHeld { name } = err else {
+            panic!("expected SnapshotHeld, got {err:?}");
+        };
+        assert_eq!(name, "tank/data/home@snap1");
     }
 
     #[test]

@@ -13,4 +13,6 @@ pub mod send;
 
 pub use engine::{Dataset, Pool, Zfs};
 pub use error::{ZfsError, classify_stderr};
-pub use runner::{ChildHandle, Cmd, CommandRunner, RealRunner, RecordingRunner};
+pub use runner::{
+    ChildHandle, Cmd, CommandRunner, RealRunner, RecordingRunner, SshCommandRunner, SshTarget,
+};

@@ -371,6 +371,69 @@ impl Dataset {
     pub async fn bookmark(&self, bookmark_name: &str) -> Result<(), ZfsError> {
         crate::bookmark::create(&*self.runner, &self.name, bookmark_name).await
     }
+
+    /// `zfs snapshot [-r] <self>@<tag>`. Returns a `Dataset` handle bound to
+    /// the new snapshot (`<self>@<tag>`), which can then be held, bookmarked,
+    /// or rolled back to via the same handle API.
+    pub async fn snapshot(
+        &self,
+        tag: &str,
+        opts: &crate::dataset::SnapshotOptions,
+    ) -> Result<Dataset, ZfsError> {
+        let full = format!("{}@{tag}", self.name);
+        crate::dataset::snapshot(&*self.runner, &full, opts).await?;
+        Ok(Dataset {
+            runner: self.runner.clone(),
+            name: full,
+        })
+    }
+
+    /// Construct a `Dataset` handle for an existing snapshot of this dataset
+    /// without taking the snapshot. Useful when handling a snapshot that
+    /// already exists (e.g., received from replication).
+    pub fn snapshot_handle(&self, tag: &str) -> Dataset {
+        Dataset {
+            runner: self.runner.clone(),
+            name: format!("{}@{tag}", self.name),
+        }
+    }
+
+    /// `zfs rollback [flags] <self>@<tag>`.
+    pub async fn rollback(
+        &self,
+        tag: &str,
+        opts: &crate::dataset::RollbackOptions,
+    ) -> Result<(), ZfsError> {
+        let full = format!("{}@{tag}", self.name);
+        crate::dataset::rollback(&*self.runner, &full, opts).await
+    }
+
+    /// `zfs destroy [flags] <self>` — destroy this dataset. For destroying a
+    /// snapshot or bookmark of this dataset, use [`Self::destroy_snapshot`]
+    /// or [`Self::destroy_bookmark`].
+    pub async fn destroy(&self, opts: &crate::dataset::DestroyOptions) -> Result<(), ZfsError> {
+        crate::dataset::destroy(&*self.runner, &self.name, opts).await
+    }
+
+    /// `zfs destroy [flags] <self>@<tag>`.
+    pub async fn destroy_snapshot(
+        &self,
+        tag: &str,
+        opts: &crate::dataset::DestroyOptions,
+    ) -> Result<(), ZfsError> {
+        let full = format!("{}@{tag}", self.name);
+        crate::dataset::destroy(&*self.runner, &full, opts).await
+    }
+
+    /// `zfs destroy [flags] <self>#<mark>`.
+    pub async fn destroy_bookmark(
+        &self,
+        mark: &str,
+        opts: &crate::dataset::DestroyOptions,
+    ) -> Result<(), ZfsError> {
+        let full = format!("{}#{mark}", self.name);
+        crate::dataset::destroy(&*self.runner, &full, opts).await
+    }
 }
 
 #[cfg(test)]
@@ -538,6 +601,58 @@ mod tests {
         ds.unmount(&UnmountOptions { force: true })
             .await
             .expect("unmount succeeds");
+    }
+
+    #[tokio::test]
+    async fn dataset_snapshot_rollback_destroy_via_handle() {
+        let runner = RecordingRunner::new()
+            .record(
+                Cmd::new("zfs").args(["snapshot", "tank/data@snap1"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["rollback", "-r", "tank/data@snap1"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["destroy", "tank/data@snap1"]),
+                vec![],
+                vec![],
+                0,
+            )
+            .record(
+                Cmd::new("zfs").args(["destroy", "-r", "-f", "tank/data"]),
+                vec![],
+                vec![],
+                0,
+            );
+        let zfs = Zfs::with_runner(runner);
+        let ds = zfs.dataset("tank/data");
+        let snap = ds
+            .snapshot("snap1", &crate::dataset::SnapshotOptions::new())
+            .await
+            .expect("snapshot succeeds");
+        assert_eq!(snap.name(), "tank/data@snap1");
+        ds.rollback(
+            "snap1",
+            &crate::dataset::RollbackOptions::new().destroy_newer(),
+        )
+        .await
+        .expect("rollback succeeds");
+        ds.destroy_snapshot("snap1", &crate::dataset::DestroyOptions::new())
+            .await
+            .expect("destroy_snapshot succeeds");
+        ds.destroy(
+            &crate::dataset::DestroyOptions::new()
+                .recursive()
+                .force_unmount(),
+        )
+        .await
+        .expect("destroy succeeds");
     }
 
     #[tokio::test]

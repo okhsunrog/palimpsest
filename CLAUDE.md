@@ -48,6 +48,10 @@ The send/recv/hold/bookmark/resume_token modules are arctern-specific. The pool/
 - `cargo clippy --all-targets -- -D warnings`
 - `cargo add <crate>` to add dependencies
 - `cargo fmt`
+- `just vm-up` / `just vm-down` / `just vm-ssh` — manage the integration-test VM
+- `just test-integration` — run feature-gated integration tests against the running VM
+- `just test-vm` — one-shot boot + integration tests + shutdown (for CI)
+- `just test-cleanup` — sweep stale `palimpsest_test_*` pools inside the VM after a panic
 
 ## How to add an operation
 
@@ -56,6 +60,32 @@ The send/recv/hold/bookmark/resume_token modules are arctern-specific. The pool/
 3. Implement the operation under `src/<area>/<op>.rs` — build args, run via `CommandRunner`, parse with serde, classify errors via `classify_stderr`.
 4. Write the parser test against the fixture using `RecordingRunner`.
 5. If the operation has structured failure modes (resume tokens, validation), add a dedicated error type that wraps `ZfsError`.
+
+## Integration testing against real ZFS
+
+Unit tests use `RecordingRunner` + JSON fixtures and don't require ZFS. The `integration` cargo feature unlocks `tests/integration_*.rs`, which exercise actual `zfs` and `zpool` commands via [`SshCommandRunner`] dispatched into a throwaway VM.
+
+**Why a VM, not host ZFS?** ZFS is a kernel module; loopback-file pools created on the host run inside the host's kernel. With altroot import they cannot affect host filesystem hierarchy, but they do appear in `zpool list` and consume kernel ARC memory. Routing through a VM keeps the host pools and namespaces 100% untouched and gives crash-safe cleanup (just power off the VM).
+
+**Reuse from sibling archinstall_zfs repo**: the same archzfs test ISO that's used for fixture capture (`~/code/archinstall_zfs/gen_iso/out/archzfs-*-testing-*.iso`) is the boot medium. The justfile here boots it on port 2226 (archinstall_zfs uses 2222) so both VMs can run side by side.
+
+**Inner-loop dev**:
+
+```bash
+just vm-up            # ~10 s; leave running
+just test-integration # repeat as you iterate
+just vm-down          # when done
+```
+
+**Pool isolation inside the VM** (see `tests/common/mod.rs`):
+
+- Random pool name `palimpsest_test_<nanos>_<seq>` — collision with anything real is impossible.
+- 256 MiB sparse file in `/tmp/<pool>.img`.
+- `-R /tmp/<pool>_root` altroot import — every dataset's mountpoint is prefixed under the altroot, so the VM filesystem outside that path is untouchable.
+- `-m none` on the root dataset for belt-and-suspenders.
+- `LoopbackPool::destroy()` on success path; `Drop` runs sync best-effort cleanup if a test panics; `just test-cleanup` mops up after that fails too.
+
+**Adding integration tests**: drop a new file under `tests/integration_<area>.rs` with `#![cfg(feature = "integration")]` at top, `mod common;`, then `let pool = LoopbackPool::create(ssh_runner_from_env()).await?;` and operate via `pool.zfs()`.
 
 ## Capturing fixtures from a clean ZFS environment
 
