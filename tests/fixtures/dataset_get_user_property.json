@@ -1,0 +1,1 @@
+{"output_version":{"command":"zfs get","vers_major":0,"vers_minor":1},"datasets":{"userprop_fixture/data":{"name":"userprop_fixture/data","type":"FILESYSTEM","pool":"userprop_fixture","createtxg":"6","properties":{"arctern:cursor":{"value":"tank/data@snap1","source":{"type":"LOCAL","data":"-"}}}}}}

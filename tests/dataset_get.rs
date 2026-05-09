@@ -143,6 +143,30 @@ async fn get_returns_typed_error_on_missing_dataset() {
 }
 
 #[tokio::test]
+async fn get_user_property_roundtrips() {
+    // arctern stores replication-cursor metadata as user properties under
+    // its own module:name namespace. Confirms zfs get -j returns user
+    // properties through the same JSON shape as native ones.
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zfs").args([
+            "get",
+            "-j",
+            "-p",
+            "arctern:cursor",
+            "userprop_fixture/data",
+        ]),
+        fixture("dataset_get_user_property.json"),
+        vec![],
+        0,
+    );
+    let prop = get_property(&runner, "userprop_fixture/data", "arctern:cursor")
+        .await
+        .expect("get_property on user property succeeds");
+    assert_eq!(prop.value, "tank/data@snap1");
+    assert_eq!(prop.source.kind, PropertySourceKind::Local);
+}
+
+#[tokio::test]
 async fn get_returns_io_error_when_runner_has_no_fixture() {
     let runner = RecordingRunner::new();
     let err = get_property(&runner, "tank", "encryption")
