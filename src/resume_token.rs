@@ -28,6 +28,11 @@ pub struct ResumeToken {
     pub to_name: String,
     /// GUID of the destination snapshot.
     pub to_guid: u64,
+    /// GUID of the source snapshot for an incremental resume. `None`
+    /// means the partial recv was a full send (no `fromguid` field in
+    /// the nvlist). Callers validating "are both endpoints still on
+    /// the sender" must skip the from-side check when this is `None`.
+    pub from_guid: Option<u64>,
     /// Bytes already received (the resume offset within the stream).
     pub bytes_received: u64,
 }
@@ -92,6 +97,11 @@ fn parse_nvlist_output(text: &str, token: &str) -> Result<ResumeToken, ResumeTok
         "toguid",
     )?;
 
+    let from_guid = match fields.get("fromguid") {
+        Some(v) => Some(parse_hex_u64(v, "fromguid")?),
+        None => None,
+    };
+
     let bytes_received = parse_hex_u64(
         fields
             .get("bytes")
@@ -103,6 +113,7 @@ fn parse_nvlist_output(text: &str, token: &str) -> Result<ResumeToken, ResumeTok
         token: token.to_string(),
         to_name,
         to_guid,
+        from_guid,
         bytes_received,
     })
 }
@@ -133,8 +144,25 @@ mod tests {
         let result = parse_nvlist_output(&decoded, token).unwrap();
         assert_eq!(result.to_name, "tank/data/home@snap1");
         assert_eq!(result.to_guid, 0xd3b96c8266d7cfe6);
+        assert_eq!(result.from_guid, None);
         assert_eq!(result.bytes_received, 0x2a48);
         assert_eq!(result.token, token);
+    }
+
+    /// Incremental-resume tokens carry `fromguid` in the nvlist.
+    #[test]
+    fn parse_nvlist_with_fromguid() {
+        let text = "resume token contents:\n\
+                    nvlist version: 0\n\
+                    \tobject = 0x2\n\
+                    \toffset = 0xc0000\n\
+                    \tbytes = 0xe1488\n\
+                    \ttoguid = 0x9d03e683bc717fa6\n\
+                    \tfromguid = 0x123456789abcdef0\n\
+                    \ttoname = tank/data@snap2\n";
+        let r = parse_nvlist_output(text, "tok").unwrap();
+        assert_eq!(r.to_guid, 0x9d03e683bc717fa6);
+        assert_eq!(r.from_guid, Some(0x123456789abcdef0));
     }
 
     #[test]
@@ -178,6 +206,7 @@ mod tests {
         let result = decode(&runner, &token).await.unwrap();
         assert_eq!(result.to_name, "tank/data/home@snap1");
         assert_eq!(result.to_guid, 0xd3b96c8266d7cfe6);
+        assert_eq!(result.from_guid, None);
         assert_eq!(result.bytes_received, 0x2a48);
     }
 }
