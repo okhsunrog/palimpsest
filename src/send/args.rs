@@ -165,17 +165,13 @@ mod tests {
 
     #[test]
     fn full_send_args() {
-        let args = SendArgs::new("tank/data@snap1")
-            .build_args(false)
-            .unwrap();
+        let args = SendArgs::new("tank/data@snap1").build_args(false).unwrap();
         assert_eq!(args, vec!["send", "tank/data@snap1"]);
     }
 
     #[test]
     fn full_dry_run_args() {
-        let args = SendArgs::new("tank/data@snap1")
-            .build_args(true)
-            .unwrap();
+        let args = SendArgs::new("tank/data@snap1").build_args(true).unwrap();
         assert_eq!(args, vec!["send", "-n", "-v", "-P", "tank/data@snap1"]);
     }
 
@@ -243,7 +239,16 @@ mod tests {
             .unwrap();
         assert_eq!(
             args,
-            vec!["send", "-R", "-w", "-p", "-c", "-L", "-e", "tank/data@snap1"]
+            vec![
+                "send",
+                "-R",
+                "-w",
+                "-p",
+                "-c",
+                "-L",
+                "-e",
+                "tank/data@snap1"
+            ]
         );
     }
 }

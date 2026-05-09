@@ -28,7 +28,11 @@ pub async fn hold(runner: &dyn CommandRunner, snapshot: &str, tag: &str) -> Resu
 
 /// `zfs release <tag> <snapshot>` — releases a user hold. Not idempotent:
 /// releasing a non-existent hold is an error.
-pub async fn release(runner: &dyn CommandRunner, snapshot: &str, tag: &str) -> Result<(), ZfsError> {
+pub async fn release(
+    runner: &dyn CommandRunner,
+    snapshot: &str,
+    tag: &str,
+) -> Result<(), ZfsError> {
     let output = runner
         .run(Cmd::new("zfs").args(["release", tag, snapshot]))
         .await?;
@@ -41,10 +45,7 @@ pub async fn release(runner: &dyn CommandRunner, snapshot: &str, tag: &str) -> R
 
 /// `zfs holds -H <snapshot>` — lists user holds. Parses the tab-separated
 /// output (NAME, TAG, TIMESTAMP columns; -H suppresses the header row).
-pub async fn list_holds(
-    runner: &dyn CommandRunner,
-    snapshot: &str,
-) -> Result<Vec<Hold>, ZfsError> {
+pub async fn list_holds(runner: &dyn CommandRunner, snapshot: &str) -> Result<Vec<Hold>, ZfsError> {
     let output = runner
         .run(Cmd::new("zfs").args(["holds", "-H", snapshot]))
         .await?;

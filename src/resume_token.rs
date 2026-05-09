@@ -127,8 +127,7 @@ mod tests {
 
     #[test]
     fn parse_nvlist_fixture() {
-        let raw_token =
-            String::from_utf8(load_fixture("resume_token_raw.txt")).unwrap();
+        let raw_token = String::from_utf8(load_fixture("resume_token_raw.txt")).unwrap();
         let token = raw_token.trim();
         let decoded = String::from_utf8(load_fixture("send_resume_token_decoded.txt")).unwrap();
         let result = parse_nvlist_output(&decoded, token).unwrap();
@@ -156,15 +155,17 @@ mod tests {
 
     #[test]
     fn parse_missing_field() {
-        let err = parse_nvlist_output("resume token contents:\nnvlist version: 0\n", "tok")
-            .unwrap_err();
-        assert!(matches!(err, ResumeTokenError::MissingField { field: "toname" }));
+        let err =
+            parse_nvlist_output("resume token contents:\nnvlist version: 0\n", "tok").unwrap_err();
+        assert!(matches!(
+            err,
+            ResumeTokenError::MissingField { field: "toname" }
+        ));
     }
 
     #[tokio::test]
     async fn decode_from_fixture() {
-        let raw_token =
-            String::from_utf8(load_fixture("resume_token_raw.txt")).unwrap();
+        let raw_token = String::from_utf8(load_fixture("resume_token_raw.txt")).unwrap();
         let token = raw_token.trim().to_string();
         let decoded_fixture = load_fixture("send_resume_token_decoded.txt");
 

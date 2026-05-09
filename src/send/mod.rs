@@ -55,18 +55,12 @@ mod tests {
     #[tokio::test]
     async fn send_incremental_spawns_correct_args() {
         let runner = RecordingRunner::new().record_spawn(
-            Cmd::new("zfs").args([
-                "send",
-                "-i",
-                "tank/data/home@snap1",
-                "tank/data/home@snap2",
-            ]),
+            Cmd::new("zfs").args(["send", "-i", "tank/data/home@snap1", "tank/data/home@snap2"]),
             vec![],
             vec![],
             0,
         );
-        let args =
-            SendArgs::new("tank/data/home@snap2").incremental("tank/data/home@snap1");
+        let args = SendArgs::new("tank/data/home@snap2").incremental("tank/data/home@snap1");
         send(&runner, &args).await.expect("incremental send spawns");
     }
 
@@ -80,7 +74,9 @@ mod tests {
             0,
         );
         let args = SendArgs::new("ignored").resume_token(token);
-        send(&runner, &args).await.expect("resume token send spawns");
+        send(&runner, &args)
+            .await
+            .expect("resume token send spawns");
     }
 
     #[tokio::test]
@@ -91,7 +87,10 @@ mod tests {
             vec![],
             0,
         );
-        let args = SendArgs::new("tank/data@snap1").replicate().raw().properties();
+        let args = SendArgs::new("tank/data@snap1")
+            .replicate()
+            .raw()
+            .properties();
         send(&runner, &args).await.expect("flagged send spawns");
     }
 }

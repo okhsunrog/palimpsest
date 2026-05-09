@@ -27,10 +27,7 @@ pub struct DryRunSize {
 /// `resume_token::decode()` instead).
 ///
 /// **Output goes to stdout** in OpenZFS ≥ 2.2 with `-P` (parseable mode).
-pub async fn dry_run(
-    runner: &dyn CommandRunner,
-    args: &SendArgs,
-) -> Result<DryRunSize, ZfsError> {
+pub async fn dry_run(runner: &dyn CommandRunner, args: &SendArgs) -> Result<DryRunSize, ZfsError> {
     let cmd_args = args.build_args(true).map_err(|e| ZfsError::Other {
         exit_code: None,
         stderr: e.to_string(),

@@ -126,8 +126,15 @@ mod tests {
             panic!("expected NeedsResumeToken, got {err:?}");
         };
         // The token is the long hex string from the fixture
-        assert!(token.starts_with("1-"), "token should start with '1-', got: {token}");
-        assert!(token.len() > 10, "token should be long, got len={}", token.len());
+        assert!(
+            token.starts_with("1-"),
+            "token should start with '1-', got: {token}"
+        );
+        assert!(
+            token.len() > 10,
+            "token should be long, got len={}",
+            token.len()
+        );
     }
 
     #[test]
@@ -139,10 +146,7 @@ mod tests {
     #[test]
     fn build_args_flags() {
         let args = RecvArgs::new("tank/replica").force_rollback().unmounted();
-        assert_eq!(
-            args.build_args(),
-            vec!["recv", "-F", "-u", "tank/replica"]
-        );
+        assert_eq!(args.build_args(), vec!["recv", "-F", "-u", "tank/replica"]);
     }
 
     #[tokio::test]
