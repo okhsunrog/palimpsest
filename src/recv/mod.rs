@@ -40,6 +40,13 @@ pub struct RecvArgs {
     /// `-x property` — drop the named property from the incoming stream so
     /// the receiver inherits its parent's value.
     pub properties_inherit: Vec<String>,
+    /// `-s` — leave the partially-received state on disk if the receive
+    /// is interrupted, so the next sender can pick up via
+    /// `zfs send -t <token>`. Without this flag, an interrupted recv
+    /// destroys the partial and forces a restart from the beginning.
+    /// Required for any caller that wants `receive_resume_token` to be
+    /// populated on failure.
+    pub resumable: bool,
 }
 
 impl RecvArgs {
@@ -52,7 +59,13 @@ impl RecvArgs {
             exclude_first_component: false,
             properties_override: BTreeMap::new(),
             properties_inherit: Vec::new(),
+            resumable: false,
         }
+    }
+
+    pub fn resumable(mut self) -> Self {
+        self.resumable = true;
+        self
     }
 
     pub fn force_rollback(mut self) -> Self {
@@ -85,6 +98,9 @@ impl RecvArgs {
         }
         if self.exclude_first_component {
             args.push("-e".to_string());
+        }
+        if self.resumable {
+            args.push("-s".to_string());
         }
         for (k, v) in &self.properties_override {
             args.push("-o".to_string());
@@ -128,6 +144,36 @@ pub async fn receive_resume_token(
     } else {
         Ok(Some(prop.value))
     }
+}
+
+/// `zfs recv -A <dataset>` — discard the partially-received state from
+/// a prior interrupted resumable receive so the dataset can accept a
+/// fresh full or incremental stream. Verified in OpenZFS 2.4.1: a
+/// brand-new full send into a dataset that still carries
+/// `receive_resume_token` fails with "destination contains
+/// partially-complete state from \"zfs receive -s\"" even with `-F`.
+/// The only path to recover is `-A` (or wait for the original sender's
+/// resume stream).
+///
+/// Idempotent at the call-site's level of intent: if there is no partial,
+/// `zfs recv -A` exits non-zero with "no partial state to abort". The
+/// caller should treat that as success — there was nothing to clear.
+pub async fn abort_partial(runner: &dyn CommandRunner, dataset: &str) -> Result<(), ZfsError> {
+    let out = runner
+        .run(Cmd::new("zfs").args(["recv", "-A", dataset]))
+        .await
+        .map_err(ZfsError::Spawn)?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // No-op success: nothing to abort. ZFS's exact wording varies a
+    // little across versions; key invariant we want is "the dataset
+    // has no partial state when this returns Ok".
+    if stderr.contains("no partial") || stderr.contains("does not have any resumable") {
+        return Ok(());
+    }
+    Err(crate::error::classify_stderr(&stderr, out.status.code()))
 }
 
 /// Parse `zfs recv` stderr for a `NeedsResumeToken` condition. Call this
@@ -228,6 +274,37 @@ mod tests {
     fn build_args_flags() {
         let args = RecvArgs::new("tank/replica").force_rollback().unmounted();
         assert_eq!(args.build_args(), vec!["recv", "-F", "-u", "tank/replica"]);
+    }
+
+    #[test]
+    fn build_args_resumable_flag() {
+        let args = RecvArgs::new("tank/replica").unmounted().resumable();
+        assert_eq!(
+            args.build_args(),
+            vec!["recv", "-u", "-s", "tank/replica"]
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_partial_runs_recv_dash_a() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["recv", "-A", "tank/replica"]),
+            vec![],
+            vec![],
+            0,
+        );
+        abort_partial(&runner, "tank/replica").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn abort_partial_treats_no_partial_as_success() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["recv", "-A", "tank/replica"]),
+            vec![],
+            b"cannot abort: no partial recv to abort\n".to_vec(),
+            1,
+        );
+        abort_partial(&runner, "tank/replica").await.unwrap();
     }
 
     #[test]
