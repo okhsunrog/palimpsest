@@ -434,6 +434,14 @@ impl Dataset {
         let full = format!("{}#{mark}", self.name);
         crate::dataset::destroy(&*self.runner, &full, opts).await
     }
+
+    /// Probe whether this dataset has a partial-receive in flight. `None`
+    /// means no pending receive; `Some(token)` means a previous recv was
+    /// interrupted and can be resumed by feeding `token` into
+    /// [`crate::send::SendArgs::resume_token`].
+    pub async fn receive_resume_token(&self) -> Result<Option<String>, ZfsError> {
+        crate::recv::receive_resume_token(&*self.runner, &self.name).await
+    }
 }
 
 #[cfg(test)]

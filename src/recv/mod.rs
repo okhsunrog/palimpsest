@@ -83,6 +83,26 @@ pub async fn recv(runner: &dyn CommandRunner, args: &RecvArgs) -> Result<ChildHa
         .map_err(|e| RecvError::Zfs(ZfsError::Spawn(e)))
 }
 
+/// Probe whether `dataset` has a partial-receive in flight. Returns the
+/// resume token if there is one (ready to feed into
+/// [`crate::send::SendArgs::resume_token`]), `Ok(None)` if the dataset has
+/// no pending receive, or an error if the dataset can't be queried.
+///
+/// Backed by `zfs get -H -o value receive_resume_token <dataset>`, where
+/// ZFS returns a literal `-` for "no token". Lets callers decide
+/// resume-vs-restart without speculatively invoking `zfs recv`.
+pub async fn receive_resume_token(
+    runner: &dyn CommandRunner,
+    dataset: &str,
+) -> Result<Option<String>, ZfsError> {
+    let prop = crate::dataset::get_property(runner, dataset, "receive_resume_token").await?;
+    if prop.value == "-" || prop.value.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(prop.value))
+    }
+}
+
 /// Parse `zfs recv` stderr for a `NeedsResumeToken` condition. Call this
 /// after recv exits with a non-zero status and you have collected all stderr
 /// output. Returns `Ok(())` on clean exit, `Err(RecvError::NeedsResumeToken)`
@@ -106,6 +126,40 @@ pub fn check_recv_stderr(stderr: &str) -> Result<(), RecvError> {
 mod tests {
     use super::*;
     use crate::runner::{Cmd, RecordingRunner};
+
+    fn property_json(ds: &str, prop: &str, value: &str) -> Vec<u8> {
+        format!(
+            "{{\"output_version\":{{\"command\":\"zfs get\",\"vers_major\":0,\"vers_minor\":1}},\
+             \"datasets\":{{\"{ds}\":{{\"name\":\"{ds}\",\"type\":\"FILESYSTEM\",\
+             \"pool\":\"{ds}\",\"createtxg\":\"1\",\"properties\":{{\"{prop}\":\
+             {{\"value\":\"{value}\",\"source\":{{\"type\":\"DEFAULT\",\"data\":\"-\"}}}}}}}}}}}}"
+        )
+        .into_bytes()
+    }
+
+    #[tokio::test]
+    async fn receive_resume_token_returns_none_for_dash() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["get", "-j", "-p", "receive_resume_token", "tank/replica"]),
+            property_json("tank/replica", "receive_resume_token", "-"),
+            vec![],
+            0,
+        );
+        let token = receive_resume_token(&runner, "tank/replica").await.unwrap();
+        assert_eq!(token, None);
+    }
+
+    #[tokio::test]
+    async fn receive_resume_token_returns_some_for_real_token() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["get", "-j", "-p", "receive_resume_token", "tank/replica"]),
+            property_json("tank/replica", "receive_resume_token", "1-abc123deadbeef"),
+            vec![],
+            0,
+        );
+        let token = receive_resume_token(&runner, "tank/replica").await.unwrap();
+        assert_eq!(token.as_deref(), Some("1-abc123deadbeef"));
+    }
 
     #[test]
     fn check_recv_stderr_clean() {
