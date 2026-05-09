@@ -161,6 +161,21 @@ impl ChildHandle {
             ChildWaiter::Mock(code) => Ok(mock_exit_status(code)),
         }
     }
+
+    /// Send SIGKILL to the child process without waiting for it to exit.
+    /// Pair with [`Self::wait`] to reap. No-op for mock handles.
+    ///
+    /// Used by callers that need to abort an in-flight `zfs send` or
+    /// `zfs recv` when their own cancellation token fires. Cancellation
+    /// surfaces as a normal non-zero exit status from `wait()`; there is
+    /// no dedicated "cancelled" error variant — interpret the result
+    /// against your own cancellation state.
+    pub fn start_kill(&mut self) -> io::Result<()> {
+        match &mut self.inner {
+            ChildWaiter::Process(c) => c.start_kill(),
+            ChildWaiter::Mock(_) => Ok(()),
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -219,7 +234,11 @@ impl CommandRunner for RealRunner {
             .args(&cmd.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // If the ChildHandle is dropped without an explicit start_kill +
+            // wait, kill the child rather than leaking a long-running
+            // zfs send/recv subprocess.
+            .kill_on_drop(true);
         let child = command.spawn()?;
         Ok(ChildHandle::from_process(child))
     }
@@ -772,5 +791,48 @@ mod tests {
             .unwrap();
         let status = handle.wait().await.unwrap();
         assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn real_runner_spawn_start_kill_aborts_long_running_child() {
+        // sleep 30 — would block the test for half a minute if start_kill
+        // didn't actually terminate it.
+        let mut handle = RealRunner.spawn(Cmd::new("sleep").arg("30")).await.unwrap();
+        handle.start_kill().expect("start_kill returns Ok");
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), handle.wait())
+            .await
+            .expect("wait completes promptly after start_kill")
+            .expect("wait returns a status");
+        assert!(!status.success(), "killed child must report non-success");
+    }
+
+    #[tokio::test]
+    async fn real_runner_kill_on_drop_terminates_child() {
+        // Spawn a sleep, capture its pid, drop the handle without wait.
+        // kill_on_drop should cause tokio to reap it. We poll /proc to confirm.
+        let pid = {
+            let handle = RealRunner.spawn(Cmd::new("sleep").arg("30")).await.unwrap();
+            // Pull pid from the underlying tokio Child via the inner enum.
+            match &handle.inner {
+                ChildWaiter::Process(c) => c.id().expect("child has a pid"),
+                ChildWaiter::Mock(_) => unreachable!("RealRunner produces Process variant"),
+            }
+        };
+        // Give tokio a moment to fire the kill + reap.
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        let alive = std::path::Path::new(&format!("/proc/{pid}")).exists();
+        assert!(!alive, "dropped child (pid {pid}) should be killed");
+    }
+
+    #[tokio::test]
+    async fn mock_handle_start_kill_is_noop() {
+        let runner = RecordingRunner::new().record_spawn(
+            Cmd::new("echo").arg("ok"),
+            vec![],
+            vec![],
+            0,
+        );
+        let mut handle = runner.spawn(Cmd::new("echo").arg("ok")).await.unwrap();
+        handle.start_kill().expect("mock start_kill is Ok");
     }
 }
