@@ -7,7 +7,11 @@ pub struct ListOptions {
     pub recursive: bool,
     pub depth: Option<u32>,
     pub types: Vec<DatasetType>,
-    // Empty = list all datasets visible to the caller.
+    // Empty = list all datasets visible to the caller across all imported pools.
+    // `recursive` is honored regardless: with empty roots + `recursive=true`,
+    // ZFS still emits one entry per dataset at every depth. With empty roots and
+    // no pools imported, ZFS prints "no datasets available" to stderr but exits
+    // 0 with an empty dataset map — the call succeeds, it just returns nothing.
     pub roots: Vec<String>,
     // Empty = let zfs return its default property set. Order is preserved on the wire.
     pub properties: Vec<String>,

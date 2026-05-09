@@ -7,7 +7,8 @@
 mod common;
 
 use palimpsest::ZfsError;
-use palimpsest::dataset::{DestroyOptions, RollbackOptions, SnapshotOptions};
+use palimpsest::dataset::{DestroyOptions, ListOptions, RollbackOptions, SnapshotOptions};
+use palimpsest::models::DatasetType;
 
 use common::{LoopbackPool, ssh_runner_from_env};
 
@@ -40,6 +41,42 @@ async fn snapshot_rollback_destroy_roundtrip() {
     data.destroy_snapshot("snap1", &DestroyOptions::new())
         .await
         .expect("destroy snap1");
+
+    pool.destroy().await.expect("pool destroy");
+}
+
+#[tokio::test]
+async fn list_recursive_with_empty_roots_returns_descendants() {
+    let runner = ssh_runner_from_env();
+    let pool = LoopbackPool::create(runner.clone()).await.expect("pool");
+    let zfs = pool.zfs();
+    let root = zfs.dataset(pool.name());
+    let a = root
+        .create_dataset("a", &Default::default())
+        .await
+        .expect("create a");
+    a.create_dataset("b", &Default::default())
+        .await
+        .expect("create a/b");
+
+    let entries = palimpsest::dataset::list(
+        &runner,
+        &ListOptions {
+            recursive: true,
+            types: vec![DatasetType::Filesystem, DatasetType::Volume],
+            ..ListOptions::default()
+        },
+    )
+    .await
+    .expect("list with empty roots + recursive");
+
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    let pname = pool.name();
+    let a_full = format!("{pname}/a");
+    let b_full = format!("{pname}/a/b");
+    assert!(names.contains(&pname), "missing pool root in {names:?}");
+    assert!(names.contains(&a_full.as_str()), "missing a in {names:?}");
+    assert!(names.contains(&b_full.as_str()), "missing a/b in {names:?}");
 
     pool.destroy().await.expect("pool destroy");
 }

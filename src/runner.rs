@@ -322,6 +322,7 @@ fn quote_cmdline(cmd: &Cmd) -> String {
 /// - `LogLevel=ERROR` and `UserKnownHostsFile=/dev/null` suppress most SSH
 ///   client diagnostics, but a small amount of SSH-side text may still mix
 ///   into the captured stderr.
+#[derive(Clone)]
 pub struct SshCommandRunner {
     target: SshTarget,
     /// When set, dispatch via `sshpass -p <pw> ssh ...`. Used for the
