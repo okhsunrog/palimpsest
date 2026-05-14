@@ -10,6 +10,7 @@ pub mod recv;
 pub mod resume_token;
 pub mod runner;
 pub mod send;
+pub mod system;
 
 pub use engine::{Dataset, Pool, Zfs};
 pub use error::{ZfsError, classify_stderr};
