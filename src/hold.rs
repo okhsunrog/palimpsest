@@ -43,11 +43,14 @@ pub async fn release(
     Err(classify_stderr(&stderr, output.status.code()))
 }
 
-/// `zfs holds -H <snapshot>` — lists user holds. Parses the tab-separated
-/// output (NAME, TAG, TIMESTAMP columns; -H suppresses the header row).
+/// `zfs holds -p -H <snapshot>` — lists user holds. Parses the
+/// tab-separated output (NAME, TAG, TIMESTAMP columns; `-H` suppresses
+/// the header row; `-p` forces the timestamp to print as unix seconds,
+/// without which `zfs holds` emits human-readable dates ("Thu May 14
+/// 13:09 2026") that no parser should try to interpret.
 pub async fn list_holds(runner: &dyn CommandRunner, snapshot: &str) -> Result<Vec<Hold>, ZfsError> {
     let output = runner
-        .run(Cmd::new("zfs").args(["holds", "-H", snapshot]))
+        .run(Cmd::new("zfs").args(["holds", "-p", "-H", snapshot]))
         .await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -117,7 +120,7 @@ mod tests {
         ))
         .unwrap();
         let runner = RecordingRunner::new().record(
-            Cmd::new("zfs").args(["holds", "-H", "tank/data/home@snap1"]),
+            Cmd::new("zfs").args(["holds", "-p", "-H", "tank/data/home@snap1"]),
             fixture,
             vec![],
             0,
