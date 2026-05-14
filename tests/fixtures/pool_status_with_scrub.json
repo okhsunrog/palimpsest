@@ -1,0 +1,69 @@
+{
+    "output_version": {
+        "command": "zpool status",
+        "vers_major": 0,
+        "vers_minor": 1
+    },
+    "pools": {
+        "novafs": {
+            "name": "novafs",
+            "state": "ONLINE",
+            "pool_guid": "17817996224650470055",
+            "txg": "5572830",
+            "spa_version": "5000",
+            "zpl_version": "5",
+            "scan_stats": {
+                "function": "SCRUB",
+                "state": "FINISHED",
+                "start_time": "Sat May  9 12:44:32 PM MSK 2026",
+                "end_time": "Sat May  9 12:50:26 PM MSK 2026",
+                "to_examine": "513G",
+                "examined": "523G",
+                "skipped": "49.7M",
+                "processed": "0B",
+                "errors": "1",
+                "bytes_per_scan": "0B",
+                "pass_start": "1778518346",
+                "scrub_pause": "-",
+                "scrub_spent_paused": "0",
+                "issued_bytes_per_scan": "0B",
+                "issued": "523G"
+            },
+            "vdevs": {
+                "novafs": {
+                    "name": "novafs",
+                    "vdev_type": "root",
+                    "guid": "17817996224650470055",
+                    "class": "normal",
+                    "state": "ONLINE",
+                    "alloc_space": "608G",
+                    "total_space": "1.48T",
+                    "def_space": "1.48T",
+                    "read_errors": "0",
+                    "write_errors": "0",
+                    "checksum_errors": "0",
+                    "vdevs": {
+                        "nvme-Samsung_SSD_970_EVO_Plus_2TB_XXXXXXX1234567-part5": {
+                            "name": "nvme-Samsung_SSD_970_EVO_Plus_2TB_XXXXXXX1234567-part5",
+                            "vdev_type": "disk",
+                            "guid": "1586832545754965436",
+                            "path": "/dev/disk/by-id/nvme-Samsung_SSD_970_EVO_Plus_2TB_XXXXXXX1234567-part5",
+                            "class": "normal",
+                            "state": "ONLINE",
+                            "alloc_space": "608G",
+                            "total_space": "1.48T",
+                            "def_space": "1.48T",
+                            "rep_dev_size": "1.48T",
+                            "phys_space": "1.48T",
+                            "read_errors": "0",
+                            "write_errors": "0",
+                            "checksum_errors": "0",
+                            "slow_ios": "0"
+                        }
+                    }
+                }
+            },
+            "error_count": "0"
+        }
+    }
+}

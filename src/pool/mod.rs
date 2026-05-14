@@ -5,6 +5,7 @@ pub mod export;
 pub mod get;
 pub mod import;
 pub mod list;
+pub mod scrub;
 pub mod set;
 pub mod status;
 
@@ -15,5 +16,6 @@ pub use export::{ExportOptions, export};
 pub use get::{GetOptions, get, get_property};
 pub use import::{ImportOptions, import};
 pub use list::{ListOptions, list};
+pub use scrub::{ScrubAction, scrub};
 pub use set::set_property;
 pub use status::{status, status_all};

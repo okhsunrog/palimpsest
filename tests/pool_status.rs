@@ -1,4 +1,4 @@
-use palimpsest::pool::status;
+use palimpsest::pool::{ScrubAction, scrub, status};
 use palimpsest::{Cmd, RecordingRunner};
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -30,4 +30,62 @@ async fn status_returns_typed_entry_with_vdev_tree() {
     assert_eq!(child.state, "ONLINE");
     assert_eq!(child.read_errors, "0");
     assert_eq!(child.checksum_errors, "0");
+}
+
+#[tokio::test]
+async fn status_parses_scan_stats_when_scrub_recorded() {
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zpool").args(["status", "-j", "novafs"]),
+        fixture("pool_status_with_scrub.json"),
+        vec![],
+        0,
+    );
+    let entry = status(&runner, "novafs").await.expect("status succeeds");
+    let scan = entry.scan.expect("scan_stats present in fixture");
+    assert_eq!(scan.function, "SCRUB");
+    assert_eq!(scan.state, "FINISHED");
+    assert_eq!(scan.examined.as_deref(), Some("523G"));
+    assert_eq!(scan.errors.as_deref(), Some("1"));
+    assert_eq!(scan.pass_start.as_deref(), Some("1778518346"));
+}
+
+#[tokio::test]
+async fn scrub_start_invokes_zpool_scrub() {
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zpool").args(["scrub", "tank"]),
+        Vec::new(),
+        Vec::new(),
+        0,
+    );
+    scrub(&runner, "tank", ScrubAction::Start).await.unwrap();
+}
+
+#[tokio::test]
+async fn scrub_stop_invokes_zpool_scrub_minus_s() {
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zpool").args(["scrub", "-s", "tank"]),
+        Vec::new(),
+        Vec::new(),
+        0,
+    );
+    scrub(&runner, "tank", ScrubAction::Stop).await.unwrap();
+}
+
+#[tokio::test]
+async fn scrub_pause_and_resume_both_use_minus_p() {
+    let runner = RecordingRunner::new()
+        .record(
+            Cmd::new("zpool").args(["scrub", "-p", "tank"]),
+            Vec::new(),
+            Vec::new(),
+            0,
+        )
+        .record(
+            Cmd::new("zpool").args(["scrub", "-p", "tank"]),
+            Vec::new(),
+            Vec::new(),
+            0,
+        );
+    scrub(&runner, "tank", ScrubAction::Pause).await.unwrap();
+    scrub(&runner, "tank", ScrubAction::Resume).await.unwrap();
 }

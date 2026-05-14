@@ -51,7 +51,10 @@ pub struct ZpoolStatusEntry {
     /// The pool's root vdev tree. Keyed by vdev name (which equals the pool
     /// name for the synthetic root vdev).
     pub vdevs: HashMap<String, VdevStatus>,
-    #[serde(default)]
+    /// Most recent scrub / resilver progress, when one is active or has
+    /// completed. JSON key is `scan_stats`; some OpenZFS versions omit
+    /// this entirely on a pristine pool.
+    #[serde(default, rename = "scan_stats")]
     pub scan: Option<ScanStatus>,
 }
 
@@ -85,7 +88,12 @@ pub struct VdevStatus {
 
 /// Status of an in-flight scrub / resilver, when one is active or recently
 /// completed. OpenZFS sometimes emits this and sometimes omits it; match by
-/// `function` (`scrub` / `resilver` / `none`).
+/// `function` (`SCRUB` / `RESILVER` / `NONE`) and `state` (`SCANNING` /
+/// `FINISHED` / `CANCELED`).
+///
+/// Sizes (`to_examine`, `examined`, `skipped`, `processed`, `issued`) are
+/// strings shaped like `"523G"` because that's what zpool emits; consumers
+/// that need bytes must parse them. `pass_start` is unix seconds.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ScanStatus {
     pub function: String,
@@ -94,4 +102,22 @@ pub struct ScanStatus {
     pub start_time: Option<String>,
     #[serde(default)]
     pub end_time: Option<String>,
+    #[serde(default)]
+    pub to_examine: Option<String>,
+    #[serde(default)]
+    pub examined: Option<String>,
+    #[serde(default)]
+    pub skipped: Option<String>,
+    #[serde(default)]
+    pub processed: Option<String>,
+    #[serde(default)]
+    pub errors: Option<String>,
+    #[serde(default)]
+    pub pass_start: Option<String>,
+    #[serde(default)]
+    pub scrub_pause: Option<String>,
+    #[serde(default)]
+    pub scrub_spent_paused: Option<String>,
+    #[serde(default)]
+    pub issued: Option<String>,
 }
