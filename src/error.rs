@@ -206,10 +206,7 @@ mod tests {
 
     #[test]
     fn classifies_key_not_loaded_named() {
-        let err = classify_stderr(
-            "Key must be loaded for 'tank/encrypted'.\n",
-            Some(1),
-        );
+        let err = classify_stderr("Key must be loaded for 'tank/encrypted'.\n", Some(1));
         let ZfsError::KeyNotLoaded { name } = err else {
             panic!("expected KeyNotLoaded, got {err:?}");
         };

@@ -84,7 +84,10 @@ mod tests {
     #[test]
     fn build_args_with_create_parents() {
         let opts = CreateOptions::new().create_parents();
-        assert_eq!(opts.build_args("tank/a/b/c"), vec!["create", "-p", "tank/a/b/c"]);
+        assert_eq!(
+            opts.build_args("tank/a/b/c"),
+            vec!["create", "-p", "tank/a/b/c"]
+        );
     }
 
     #[test]

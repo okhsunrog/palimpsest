@@ -137,7 +137,9 @@ pub fn parse_arcstats(content: &str) -> Result<ArcStats, ArcStatsError> {
         let Some(name) = parts.next() else { continue };
         let Some(_ty) = parts.next() else { continue };
         let Some(value) = parts.next() else { continue };
-        let Ok(v) = value.parse::<u64>() else { continue };
+        let Ok(v) = value.parse::<u64>() else {
+            continue;
+        };
         raw.insert(name.to_string(), v);
     }
 
@@ -224,7 +226,8 @@ mod tests {
     fn unparseable_rows_are_skipped_not_fatal() {
         // A future kernel could add a row whose last column isn't a u64
         // (a string, say). We don't want to crash on that — just skip.
-        let input = "header\nname type data\nhits 4 12345\nweird_string_stat 7 abcdef\nmisses 4 678\n";
+        let input =
+            "header\nname type data\nhits 4 12345\nweird_string_stat 7 abcdef\nmisses 4 678\n";
         let s = parse_arcstats(input).unwrap();
         assert_eq!(s.hits, 12345);
         assert_eq!(s.misses, 678);

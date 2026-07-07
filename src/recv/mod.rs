@@ -279,10 +279,7 @@ mod tests {
     #[test]
     fn build_args_resumable_flag() {
         let args = RecvArgs::new("tank/replica").unmounted().resumable();
-        assert_eq!(
-            args.build_args(),
-            vec!["recv", "-u", "-s", "tank/replica"]
-        );
+        assert_eq!(args.build_args(), vec!["recv", "-u", "-s", "tank/replica"]);
     }
 
     #[tokio::test]

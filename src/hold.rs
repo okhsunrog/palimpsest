@@ -60,6 +60,37 @@ pub async fn list_holds(runner: &dyn CommandRunner, snapshot: &str) -> Result<Ve
     parse_holds_text(&text)
 }
 
+/// `zfs holds -p -H <snap> <snap>...` — list user holds across many
+/// snapshots in one invocation. Callers sweeping a dataset for stale
+/// hold tags want this over N per-snapshot `list_holds` calls.
+///
+/// Best-effort on partial failure: if some of the named snapshots have
+/// vanished between the caller's `zfs list` and this call, `zfs holds`
+/// exits non-zero but still prints rows for the survivors — those rows
+/// are returned. A non-zero exit with no parseable rows is a real error.
+pub async fn list_holds_many(
+    runner: &dyn CommandRunner,
+    snapshots: &[&str],
+) -> Result<Vec<Hold>, ZfsError> {
+    if snapshots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let output = runner
+        .run(
+            Cmd::new("zfs")
+                .args(["holds", "-p", "-H"])
+                .args(snapshots.iter().copied()),
+        )
+        .await?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    let holds = parse_holds_text(&text)?;
+    if !output.status.success() && holds.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(classify_stderr(&stderr, output.status.code()));
+    }
+    Ok(holds)
+}
+
 fn parse_holds_text(text: &str) -> Result<Vec<Hold>, ZfsError> {
     let mut holds = Vec::new();
     for line in text.lines() {
@@ -130,6 +161,57 @@ mod tests {
         assert_eq!(holds[0].dataset, "tank/data/home@snap1");
         assert_eq!(holds[0].tag, "mytag");
         assert_eq!(holds[0].timestamp, 1_777_313_280);
+    }
+
+    #[tokio::test]
+    async fn list_holds_many_empty_input_skips_spawn() {
+        // No fixture recorded — any spawn would error NotFound.
+        let runner = RecordingRunner::new();
+        let holds = list_holds_many(&runner, &[]).await.unwrap();
+        assert!(holds.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_holds_many_parses_multiple_snapshots() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["holds", "-p", "-H", "tank/d@s1", "tank/d@s2"]),
+            b"tank/d@s1\ttag_a\t1777313280\ntank/d@s2\ttag_b\t1777313281\n".to_vec(),
+            vec![],
+            0,
+        );
+        let holds = list_holds_many(&runner, &["tank/d@s1", "tank/d@s2"])
+            .await
+            .unwrap();
+        assert_eq!(holds.len(), 2);
+        assert_eq!(holds[0].dataset, "tank/d@s1");
+        assert_eq!(holds[1].tag, "tag_b");
+    }
+
+    #[tokio::test]
+    async fn list_holds_many_partial_failure_returns_survivors() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["holds", "-p", "-H", "tank/d@s1", "tank/d@gone"]),
+            b"tank/d@s1\ttag_a\t1777313280\n".to_vec(),
+            b"cannot open 'tank/d@gone': dataset does not exist\n".to_vec(),
+            1,
+        );
+        let holds = list_holds_many(&runner, &["tank/d@s1", "tank/d@gone"])
+            .await
+            .unwrap();
+        assert_eq!(holds.len(), 1);
+        assert_eq!(holds[0].tag, "tag_a");
+    }
+
+    #[tokio::test]
+    async fn list_holds_many_total_failure_errors() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["holds", "-p", "-H", "tank/d@gone"]),
+            vec![],
+            b"cannot open 'tank/d@gone': dataset does not exist\n".to_vec(),
+            1,
+        );
+        let err = list_holds_many(&runner, &["tank/d@gone"]).await.unwrap_err();
+        assert!(matches!(err, ZfsError::DatasetNotFound { .. }));
     }
 
     #[tokio::test]

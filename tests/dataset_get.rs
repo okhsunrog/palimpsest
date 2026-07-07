@@ -148,13 +148,7 @@ async fn get_user_property_roundtrips() {
     // its own module:name namespace. Confirms zfs get -j returns user
     // properties through the same JSON shape as native ones.
     let runner = RecordingRunner::new().record(
-        Cmd::new("zfs").args([
-            "get",
-            "-j",
-            "-p",
-            "arctern:cursor",
-            "userprop_fixture/data",
-        ]),
+        Cmd::new("zfs").args(["get", "-j", "-p", "arctern:cursor", "userprop_fixture/data"]),
         fixture("dataset_get_user_property.json"),
         vec![],
         0,

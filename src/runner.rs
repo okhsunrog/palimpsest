@@ -204,6 +204,33 @@ pub trait CommandRunner: Send + Sync {
 
 pub struct RealRunner;
 
+/// Spawn `command` with `bytes` piped to stdin, collecting stdout/stderr.
+/// The stdin feed runs concurrently with output collection — writing the
+/// whole payload before draining the pipes would deadlock once the child
+/// fills its stdout buffer while still reading stdin. Write errors are
+/// deliberately dropped: a child that exits before consuming all of
+/// stdin (e.g. `load-key` rejecting a passphrase) yields BrokenPipe,
+/// and that must not mask the child's own exit status and stderr.
+async fn run_with_stdin(
+    mut command: tokio::process::Command,
+    bytes: Vec<u8>,
+) -> Result<Output, io::Error> {
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn()?;
+    let mut stdin = child.stdin.take();
+    let feed = async {
+        if let Some(mut s) = stdin.take() {
+            let _ = s.write_all(&bytes).await;
+            let _ = s.shutdown().await;
+        }
+    };
+    let (_, output) = tokio::join!(feed, child.wait_with_output());
+    output
+}
+
 #[async_trait::async_trait]
 impl CommandRunner for RealRunner {
     async fn run(&self, cmd: Cmd) -> Result<Output, io::Error> {
@@ -213,18 +240,7 @@ impl CommandRunner for RealRunner {
 
         match stdin_bytes {
             None => command.output().await,
-            Some(bytes) => {
-                command
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-                let mut child = command.spawn()?;
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(&bytes).await?;
-                    stdin.shutdown().await?;
-                }
-                child.wait_with_output().await
-            }
+            Some(bytes) => run_with_stdin(command, bytes).await,
         }
     }
 
@@ -262,17 +278,38 @@ impl SshTarget {
     }
 
     /// Parse `[user@]host[:port]`. User defaults to `root`, port to 22.
+    /// IPv6 literals need brackets to carry a port (`[::1]:2222`); a bare
+    /// address (`::1`, `fe80::1`) is taken whole as the host with port 22
+    /// — naive `rsplit(':')` would otherwise eat the last address group.
     pub fn parse(s: &str) -> Result<Self, String> {
         let (user, rest) = match s.split_once('@') {
             Some((u, r)) => (u.to_string(), r),
             None => ("root".to_string(), s),
         };
-        let (host, port) = match rest.rsplit_once(':') {
-            Some((h, p)) => {
-                let port: u16 = p.parse().map_err(|e| format!("port `{p}`: {e}"))?;
-                (h.to_string(), port)
+        let (host, port) = if let Some(bracketed) = rest.strip_prefix('[') {
+            let Some((h, after)) = bracketed.split_once(']') else {
+                return Err("unclosed '[' in IPv6 literal".into());
+            };
+            let port = match after {
+                "" => 22,
+                _ => {
+                    let p = after
+                        .strip_prefix(':')
+                        .ok_or_else(|| format!("unexpected `{after}` after ']'"))?;
+                    p.parse().map_err(|e| format!("port `{p}`: {e}"))?
+                }
+            };
+            (h.to_string(), port)
+        } else if rest.matches(':').count() > 1 {
+            (rest.to_string(), 22)
+        } else {
+            match rest.rsplit_once(':') {
+                Some((h, p)) => {
+                    let port: u16 = p.parse().map_err(|e| format!("port `{p}`: {e}"))?;
+                    (h.to_string(), port)
+                }
+                None => (rest.to_string(), 22),
             }
-            None => (rest.to_string(), 22),
         };
         if host.is_empty() {
             return Err("empty host".into());
@@ -400,21 +437,13 @@ impl SshCommandRunner {
 impl CommandRunner for SshCommandRunner {
     async fn run(&self, cmd: Cmd) -> Result<Output, io::Error> {
         let stdin_bytes = cmd.stdin_bytes().map(<[u8]>::to_vec);
-        let mut local = self.build_command(&cmd);
+        let local = self.build_command(&cmd);
         match stdin_bytes {
-            None => local.output().await,
-            Some(bytes) => {
-                local
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
-                let mut child = local.spawn()?;
-                if let Some(mut stdin) = child.stdin.take() {
-                    stdin.write_all(&bytes).await?;
-                    stdin.shutdown().await?;
-                }
-                child.wait_with_output().await
+            None => {
+                let mut local = local;
+                local.output().await
             }
+            Some(bytes) => run_with_stdin(local, bytes).await,
         }
     }
 
@@ -725,6 +754,62 @@ mod tests {
     }
 
     #[test]
+    fn ssh_target_parse_bare_ipv6_takes_whole_as_host() {
+        let t = SshTarget::parse("root@::1").unwrap();
+        assert_eq!(t.host, "::1");
+        assert_eq!(t.port, 22);
+        let t = SshTarget::parse("fe80::1").unwrap();
+        assert_eq!(t.host, "fe80::1");
+        assert_eq!(t.port, 22);
+    }
+
+    #[test]
+    fn ssh_target_parse_bracketed_ipv6_with_port() {
+        let t = SshTarget::parse("alice@[::1]:2222").unwrap();
+        assert_eq!(t.user, "alice");
+        assert_eq!(t.host, "::1");
+        assert_eq!(t.port, 2222);
+        let t = SshTarget::parse("[fe80::1]").unwrap();
+        assert_eq!(t.host, "fe80::1");
+        assert_eq!(t.port, 22);
+    }
+
+    #[test]
+    fn ssh_target_parse_rejects_malformed_ipv6_brackets() {
+        assert!(SshTarget::parse("[::1").is_err());
+        assert!(SshTarget::parse("[::1]junk").is_err());
+        assert!(SshTarget::parse("[::1]:notaport").is_err());
+    }
+
+    #[tokio::test]
+    async fn real_runner_stdin_larger_than_pipe_buffer_does_not_deadlock() {
+        // `cat` echoes stdin to stdout; with a payload well past the 64 KiB
+        // pipe buffer, feeding stdin to completion before draining stdout
+        // would deadlock. run_with_stdin drives both concurrently.
+        let payload = vec![b'x'; 1 << 20];
+        let out = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            RealRunner.run(Cmd::new("cat").stdin(payload.clone())),
+        )
+        .await
+        .expect("must not deadlock")
+        .unwrap();
+        assert!(out.status.success());
+        assert_eq!(out.stdout.len(), payload.len());
+    }
+
+    #[tokio::test]
+    async fn real_runner_child_ignoring_stdin_still_reports_output() {
+        // `true` exits without reading stdin; the resulting BrokenPipe on
+        // the feed side must not mask the child's exit status.
+        let out = RealRunner
+            .run(Cmd::new("true").stdin(vec![b'x'; 1 << 20]))
+            .await
+            .unwrap();
+        assert!(out.status.success());
+    }
+
+    #[test]
     fn ssh_runner_argv_pubkey_mode() {
         let r = SshCommandRunner::new(SshTarget::new("root", "localhost", 2225));
         let (prog, argv) = r.build_local_argv(&Cmd::new("zfs").args(["list", "-j"]));
@@ -827,12 +912,8 @@ mod tests {
 
     #[tokio::test]
     async fn mock_handle_start_kill_is_noop() {
-        let runner = RecordingRunner::new().record_spawn(
-            Cmd::new("echo").arg("ok"),
-            vec![],
-            vec![],
-            0,
-        );
+        let runner =
+            RecordingRunner::new().record_spawn(Cmd::new("echo").arg("ok"), vec![], vec![], 0);
         let mut handle = runner.spawn(Cmd::new("echo").arg("ok")).await.unwrap();
         handle.start_kill().expect("mock start_kill is Ok");
     }
