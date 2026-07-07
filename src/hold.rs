@@ -210,7 +210,9 @@ mod tests {
             b"cannot open 'tank/d@gone': dataset does not exist\n".to_vec(),
             1,
         );
-        let err = list_holds_many(&runner, &["tank/d@gone"]).await.unwrap_err();
+        let err = list_holds_many(&runner, &["tank/d@gone"])
+            .await
+            .unwrap_err();
         assert!(matches!(err, ZfsError::DatasetNotFound { .. }));
     }
 
