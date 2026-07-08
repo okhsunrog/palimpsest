@@ -70,8 +70,14 @@ pub struct VdevStatus {
     pub path: Option<String>,
     pub class: String,
     pub state: String,
+    // Space accounting is absent on leaf disks inside interior vdevs
+    // (observed with mirror members on zfs 2.3.2); default to empty
+    // rather than failing the whole status parse.
+    #[serde(default)]
     pub alloc_space: String,
+    #[serde(default)]
     pub total_space: String,
+    #[serde(default)]
     pub def_space: String,
     pub read_errors: String,
     pub write_errors: String,
