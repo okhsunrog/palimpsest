@@ -9,8 +9,11 @@ pub enum ScrubAction {
     /// `zpool scrub -p <pool>` — pause an in-progress scrub. ZFS persists
     /// the pause across reboots; call `Resume` to continue.
     Pause,
-    /// `zpool scrub -p <pool>` again on a paused scrub resumes it. ZFS
-    /// itself toggles pause/resume with the same flag.
+    /// `zpool scrub <pool>` on a paused scrub continues it from where it
+    /// paused. There is no dedicated resume flag — `-p` on an already-
+    /// paused scrub is an error ("scrub is paused; use 'zpool scrub' to
+    /// resume"), so Resume maps to the bare command like Start; zpool
+    /// distinguishes them by the pool's current scan state.
     Resume,
     /// `zpool scrub -s <pool>` — cancel and discard scrub progress.
     Stop,
@@ -19,8 +22,8 @@ pub enum ScrubAction {
 impl ScrubAction {
     fn flag(self) -> Option<&'static str> {
         match self {
-            ScrubAction::Start => None,
-            ScrubAction::Pause | ScrubAction::Resume => Some("-p"),
+            ScrubAction::Start | ScrubAction::Resume => None,
+            ScrubAction::Pause => Some("-p"),
             ScrubAction::Stop => Some("-s"),
         }
     }
@@ -46,4 +49,42 @@ pub async fn scrub(
         return Err(classify_stderr(&stderr, output.status.code()));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::RecordingRunner;
+
+    async fn assert_argv(action: ScrubAction, argv: &[&str]) {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zpool").args(argv.to_vec()),
+            Vec::new(),
+            Vec::new(),
+            0,
+        );
+        scrub(&runner, "tank", action).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn start_is_bare_scrub() {
+        assert_argv(ScrubAction::Start, &["scrub", "tank"]).await;
+    }
+
+    #[tokio::test]
+    async fn pause_uses_dash_p() {
+        assert_argv(ScrubAction::Pause, &["scrub", "-p", "tank"]).await;
+    }
+
+    /// Regression: `-p` on an already-paused scrub errors with "use
+    /// 'zpool scrub' to resume" — resume must be the bare command.
+    #[tokio::test]
+    async fn resume_is_bare_scrub_not_dash_p() {
+        assert_argv(ScrubAction::Resume, &["scrub", "tank"]).await;
+    }
+
+    #[tokio::test]
+    async fn stop_uses_dash_s() {
+        assert_argv(ScrubAction::Stop, &["scrub", "-s", "tank"]).await;
+    }
 }
