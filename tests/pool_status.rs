@@ -72,7 +72,9 @@ async fn scrub_stop_invokes_zpool_scrub_minus_s() {
 }
 
 #[tokio::test]
-async fn scrub_pause_and_resume_both_use_minus_p() {
+async fn scrub_pause_uses_minus_p_and_resume_is_bare() {
+    // zpool has no resume flag: -p pauses, and -p on an already-paused
+    // scrub errors with "use 'zpool scrub' to resume".
     let runner = RecordingRunner::new()
         .record(
             Cmd::new("zpool").args(["scrub", "-p", "tank"]),
@@ -81,7 +83,7 @@ async fn scrub_pause_and_resume_both_use_minus_p() {
             0,
         )
         .record(
-            Cmd::new("zpool").args(["scrub", "-p", "tank"]),
+            Cmd::new("zpool").args(["scrub", "tank"]),
             Vec::new(),
             Vec::new(),
             0,
