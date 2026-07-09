@@ -1,20 +1,63 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
 use crate::error::ZfsError;
 use crate::runner::{ChildHandle, Cmd, CommandRunner};
+use tokio::io::{AsyncReadExt, AsyncWrite};
 
 #[derive(Error, Debug)]
 pub enum RecvError {
     /// `zfs recv` was interrupted mid-stream. The embedded `token` can be
-    /// passed to `SendArgs::resume_token()` to generate a resuming stream
+    /// passed to `SendArgs::resume()` to generate a resuming stream
     /// on the sender. The partially received snapshot is preserved.
     #[error("receive interrupted; resume with: zfs send -t {token}")]
     NeedsResumeToken { token: String },
 
     #[error(transparent)]
     Zfs(#[from] ZfsError),
+}
+
+/// Running `zfs recv` process with stderr drained concurrently.
+pub struct RecvProcess {
+    child: ChildHandle,
+    stderr: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+}
+
+impl RecvProcess {
+    pub fn take_stdin(&mut self) -> Option<Box<dyn AsyncWrite + Unpin + Send>> {
+        self.child.stdin.take()
+    }
+
+    pub async fn finish(self) -> Result<(), RecvError> {
+        let status = self.child.wait().await.map_err(ZfsError::Spawn)?;
+        let stderr = self
+            .stderr
+            .await
+            .map_err(|error| ZfsError::Other {
+                exit_code: status.code(),
+                stderr: format!("recv stderr task failed: {error}"),
+            })?
+            .map_err(ZfsError::Spawn)?;
+        if status.success() {
+            return Ok(());
+        }
+        let text = String::from_utf8_lossy(&stderr);
+        if let Some(token) = resume_token_from_stderr(&text) {
+            return Err(RecvError::NeedsResumeToken { token });
+        }
+        Err(RecvError::Zfs(crate::error::classify_stderr(
+            &text,
+            status.code(),
+        )))
+    }
+
+    pub async fn cancel(mut self) -> Result<(), RecvError> {
+        self.child.start_kill().map_err(ZfsError::Spawn)?;
+        let _ = self.child.wait().await.map_err(ZfsError::Spawn)?;
+        let _ = self.stderr.await;
+        Ok(())
+    }
 }
 
 /// Arguments for a `zfs recv` invocation.
@@ -32,7 +75,7 @@ pub struct RecvArgs {
     pub discard_first_component: bool,
     /// `-e` — strip everything but the last component of the sending dataset's
     /// name, appending it to the target.
-    pub exclude_first_component: bool,
+    pub discard_except_last_component: bool,
     /// `-o property=value` overrides emitted in deterministic key order so
     /// the wire arglist is reproducible (helps fixture-based tests and
     /// makes diffs of recorded commands meaningful).
@@ -56,7 +99,7 @@ impl RecvArgs {
             force_rollback: false,
             unmounted: false,
             discard_first_component: false,
-            exclude_first_component: false,
+            discard_except_last_component: false,
             properties_override: BTreeMap::new(),
             properties_inherit: Vec::new(),
             resumable: false,
@@ -76,6 +119,14 @@ impl RecvArgs {
         self.unmounted = true;
         self
     }
+    pub fn discard_first_component(mut self) -> Self {
+        self.discard_first_component = true;
+        self
+    }
+    pub fn discard_except_last_component(mut self) -> Self {
+        self.discard_except_last_component = true;
+        self
+    }
     pub fn property_override(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.properties_override.insert(key.into(), value.into());
         self
@@ -85,7 +136,45 @@ impl RecvArgs {
         self
     }
 
-    fn build_args(&self) -> Vec<String> {
+    pub fn build_args(&self) -> Result<Vec<String>, ZfsError> {
+        if self.target.contains('@') {
+            crate::names::SnapshotName::parse(&self.target)?;
+        } else {
+            crate::names::DatasetName::parse(&self.target)?;
+        }
+        if self.discard_first_component && self.discard_except_last_component {
+            return Err(ZfsError::InvalidInput {
+                message: "RecvArgs cannot enable both -d and -e".to_string(),
+            });
+        }
+        if self.target.contains('@')
+            && (self.discard_first_component || self.discard_except_last_component)
+        {
+            return Err(ZfsError::InvalidInput {
+                message: "zfs recv -d/-e requires a filesystem target, not a snapshot".to_string(),
+            });
+        }
+        let mut seen = BTreeSet::new();
+        if let Some(property) = self
+            .properties_inherit
+            .iter()
+            .find(|property| !seen.insert(property.as_str()))
+        {
+            return Err(ZfsError::InvalidInput {
+                message: format!("receive property {property:?} is inherited more than once"),
+            });
+        }
+        if let Some(property) = self
+            .properties_inherit
+            .iter()
+            .find(|property| self.properties_override.contains_key(*property))
+        {
+            return Err(ZfsError::InvalidInput {
+                message: format!(
+                    "receive property {property:?} cannot be both overridden and inherited"
+                ),
+            });
+        }
         let mut args = vec!["recv".to_string()];
         if self.force_rollback {
             args.push("-F".to_string());
@@ -96,7 +185,7 @@ impl RecvArgs {
         if self.discard_first_component {
             args.push("-d".to_string());
         }
-        if self.exclude_first_component {
+        if self.discard_except_last_component {
             args.push("-e".to_string());
         }
         if self.resumable {
@@ -111,24 +200,36 @@ impl RecvArgs {
             args.push(k.clone());
         }
         args.push(self.target.clone());
-        args
+        Ok(args)
     }
 }
 
-/// `zfs recv [flags] <target>` — spawn the receive process and return a
-/// [`ChildHandle`]. Callers write the byte stream to `child.stdin`, close it,
-/// then read `child.stderr` and call `check_recv_stderr()` to detect resume
-/// tokens before calling `child.wait()`.
-pub async fn recv(runner: &dyn CommandRunner, args: &RecvArgs) -> Result<ChildHandle, RecvError> {
-    runner
-        .spawn(Cmd::new("zfs").args(args.build_args()))
+/// `zfs recv [flags] <target>` — spawn a managed receive process. Callers take
+/// its stdin, write and close the stream, then call [`RecvProcess::finish`].
+/// Stderr is drained concurrently and non-zero exits are classified there.
+pub async fn recv(runner: &dyn CommandRunner, args: &RecvArgs) -> Result<RecvProcess, RecvError> {
+    let command_args = args.build_args()?;
+    let mut child = runner
+        .spawn(Cmd::new("zfs").args(command_args))
         .await
-        .map_err(|e| RecvError::Zfs(ZfsError::Spawn(e)))
+        .map_err(|e| RecvError::Zfs(ZfsError::Spawn(e)))?;
+    let mut stderr = child.stderr.take().ok_or_else(|| {
+        RecvError::Zfs(ZfsError::Other {
+            exit_code: None,
+            stderr: "zfs recv runner did not provide stderr".to_string(),
+        })
+    })?;
+    let stderr = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).await?;
+        Ok(bytes)
+    });
+    Ok(RecvProcess { child, stderr })
 }
 
 /// Probe whether `dataset` has a partial-receive in flight. Returns the
 /// resume token if there is one (ready to feed into
-/// [`crate::send::SendArgs::resume_token`]), `Ok(None)` if the dataset has
+/// [`crate::send::SendArgs::resume`]), `Ok(None)` if the dataset has
 /// no pending receive, or an error if the dataset can't be queried.
 ///
 /// Backed by `zfs get -H -o value receive_resume_token <dataset>`, where
@@ -180,19 +281,20 @@ pub async fn abort_partial(runner: &dyn CommandRunner, dataset: &str) -> Result<
 /// after recv exits with a non-zero status and you have collected all stderr
 /// output. Returns `Ok(())` on clean exit, `Err(RecvError::NeedsResumeToken)`
 /// when the interrupted-stream marker is found.
-pub fn check_recv_stderr(stderr: &str) -> Result<(), RecvError> {
+fn resume_token_from_stderr(stderr: &str) -> Option<String> {
     if !stderr.contains("checksum mismatch or incomplete stream") {
-        return Ok(());
+        return None;
     }
     for line in stderr.lines() {
         // The hint line is always "    zfs send -t <token>" (4-space indent).
         if let Some(rest) = line.strip_prefix("    zfs send -t ") {
-            return Err(RecvError::NeedsResumeToken {
-                token: rest.trim().to_string(),
-            });
+            let token = rest.trim();
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
         }
     }
-    Ok(())
+    None
 }
 
 #[cfg(test)]
@@ -236,8 +338,8 @@ mod tests {
 
     #[test]
     fn check_recv_stderr_clean() {
-        assert!(check_recv_stderr("").is_ok());
-        assert!(check_recv_stderr("receive complete.\n").is_ok());
+        assert_eq!(resume_token_from_stderr(""), None);
+        assert_eq!(resume_token_from_stderr("receive complete.\n"), None);
     }
 
     #[test]
@@ -248,10 +350,7 @@ mod tests {
         ))
         .unwrap();
         let text = String::from_utf8_lossy(&fixture);
-        let err = check_recv_stderr(&text).unwrap_err();
-        let RecvError::NeedsResumeToken { token } = err else {
-            panic!("expected NeedsResumeToken, got {err:?}");
-        };
+        let token = resume_token_from_stderr(&text).expect("resume token");
         // The token is the long hex string from the fixture
         assert!(
             token.starts_with("1-"),
@@ -267,19 +366,25 @@ mod tests {
     #[test]
     fn build_args_defaults() {
         let args = RecvArgs::new("tank/replica");
-        assert_eq!(args.build_args(), vec!["recv", "tank/replica"]);
+        assert_eq!(args.build_args().unwrap(), vec!["recv", "tank/replica"]);
     }
 
     #[test]
     fn build_args_flags() {
         let args = RecvArgs::new("tank/replica").force_rollback().unmounted();
-        assert_eq!(args.build_args(), vec!["recv", "-F", "-u", "tank/replica"]);
+        assert_eq!(
+            args.build_args().unwrap(),
+            vec!["recv", "-F", "-u", "tank/replica"]
+        );
     }
 
     #[test]
     fn build_args_resumable_flag() {
         let args = RecvArgs::new("tank/replica").unmounted().resumable();
-        assert_eq!(args.build_args(), vec!["recv", "-u", "-s", "tank/replica"]);
+        assert_eq!(
+            args.build_args().unwrap(),
+            vec!["recv", "-u", "-s", "tank/replica"]
+        );
     }
 
     #[tokio::test]
@@ -313,7 +418,7 @@ mod tests {
             .property_override("canmount", "off")
             .property_inherit("mountpoint");
         assert_eq!(
-            args.build_args(),
+            args.build_args().unwrap(),
             vec![
                 "recv",
                 "-u",
@@ -325,6 +430,54 @@ mod tests {
                 "mountpoint",
                 "tank/replica"
             ]
+        );
+    }
+
+    #[test]
+    fn build_args_rejects_conflicting_shape_and_property_flags() {
+        let mut shape = RecvArgs::new("tank/replica");
+        shape.discard_first_component = true;
+        shape.discard_except_last_component = true;
+        assert!(matches!(
+            shape.build_args(),
+            Err(ZfsError::InvalidInput { .. })
+        ));
+
+        let properties = RecvArgs::new("tank/replica")
+            .property_override("mountpoint", "/srv")
+            .property_inherit("mountpoint");
+        assert!(matches!(
+            properties.build_args(),
+            Err(ZfsError::InvalidInput { .. })
+        ));
+
+        let duplicate = RecvArgs::new("tank/replica")
+            .property_inherit("mountpoint")
+            .property_inherit("mountpoint");
+        assert!(matches!(
+            duplicate.build_args(),
+            Err(ZfsError::InvalidInput { .. })
+        ));
+    }
+
+    #[test]
+    fn build_args_validates_target_shape() {
+        assert!(matches!(
+            RecvArgs::new("tank//replica").build_args(),
+            Err(ZfsError::InvalidName(_))
+        ));
+        assert!(matches!(
+            RecvArgs::new("tank/data@snap")
+                .discard_first_component()
+                .build_args(),
+            Err(ZfsError::InvalidInput { .. })
+        ));
+        assert_eq!(
+            RecvArgs::new("tank/root")
+                .discard_except_last_component()
+                .build_args()
+                .unwrap(),
+            vec!["recv", "-e", "tank/root"]
         );
     }
 
@@ -340,20 +493,14 @@ mod tests {
         );
         let args = RecvArgs::new("tank/replica").force_rollback();
         let mut handle = recv(&runner, &args).await.expect("recv spawns");
-        handle
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(b"fake-stream")
-            .await
-            .unwrap();
-        assert!(handle.wait().await.unwrap().success());
+        let mut stdin = handle.take_stdin().unwrap();
+        stdin.write_all(b"fake-stream").await.unwrap();
+        drop(stdin);
+        handle.finish().await.unwrap();
     }
 
     #[tokio::test]
     async fn recv_interrupted_stderr_yields_resume_token() {
-        use tokio::io::AsyncReadExt;
-
         let fixture = std::fs::read(format!(
             "{}/tests/fixtures/send_recv_interrupted.stderr",
             env!("CARGO_MANIFEST_DIR")
@@ -366,19 +513,9 @@ mod tests {
             1,
         );
         let args = RecvArgs::new("tank/data");
-        let mut handle = recv(&runner, &args).await.expect("recv spawns");
+        let handle = recv(&runner, &args).await.expect("recv spawns");
 
-        let mut stderr_buf = Vec::new();
-        handle
-            .stderr
-            .as_mut()
-            .unwrap()
-            .read_to_end(&mut stderr_buf)
-            .await
-            .unwrap();
-        let _status = handle.wait().await.unwrap();
-
-        let err = check_recv_stderr(&String::from_utf8_lossy(&stderr_buf)).unwrap_err();
+        let err = handle.finish().await.unwrap_err();
         assert!(matches!(err, RecvError::NeedsResumeToken { .. }));
     }
 }

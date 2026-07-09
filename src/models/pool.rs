@@ -18,10 +18,15 @@ pub struct ZpoolListEntry {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: String,
+    #[serde(default)]
     pub state: String,
+    #[serde(default)]
     pub pool_guid: String,
+    #[serde(default)]
     pub txg: String,
+    #[serde(default)]
     pub spa_version: String,
+    #[serde(default)]
     pub zpl_version: String,
     #[serde(default)]
     pub properties: PropertyMap,
@@ -42,14 +47,21 @@ pub struct ZpoolStatusOutput {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ZpoolStatusEntry {
     pub name: String,
+    #[serde(default)]
     pub state: String,
+    #[serde(default)]
     pub pool_guid: String,
+    #[serde(default)]
     pub txg: String,
+    #[serde(default)]
     pub spa_version: String,
+    #[serde(default)]
     pub zpl_version: String,
+    #[serde(default)]
     pub error_count: String,
     /// The pool's root vdev tree. Keyed by vdev name (which equals the pool
     /// name for the synthetic root vdev).
+    #[serde(default)]
     pub vdevs: HashMap<String, VdevStatus>,
     /// Most recent scrub / resilver progress, when one is active or has
     /// completed. JSON key is `scan_stats`; some OpenZFS versions omit
@@ -64,11 +76,15 @@ pub struct ZpoolStatusEntry {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VdevStatus {
     pub name: String,
+    #[serde(default)]
     pub vdev_type: String,
+    #[serde(default)]
     pub guid: String,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
     pub class: String,
+    #[serde(default)]
     pub state: String,
     // Space accounting is absent on leaf disks inside interior vdevs
     // (observed with mirror members on zfs 2.3.2); default to empty
@@ -79,8 +95,11 @@ pub struct VdevStatus {
     pub total_space: String,
     #[serde(default)]
     pub def_space: String,
+    #[serde(default)]
     pub read_errors: String,
+    #[serde(default)]
     pub write_errors: String,
+    #[serde(default)]
     pub checksum_errors: String,
     #[serde(default)]
     pub rep_dev_size: Option<String>,

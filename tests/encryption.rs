@@ -1,4 +1,4 @@
-use zfskit::encryption::{load_key, load_key_with_passphrase, unload_key};
+use zfskit::encryption::{load_key, load_key_with_passphrase, unload_key, verify_passphrase};
 use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -93,7 +93,7 @@ async fn load_key_is_idempotent_when_already_loaded() {
 async fn load_key_with_passphrase_correct() {
     let runner = RecordingRunner::new().record(
         Cmd::new("zfs")
-            .args(["load-key", "tank/encrypted"])
+            .args(["load-key", "-L", "prompt", "tank/encrypted"])
             .stdin_secret(b"correct".to_vec()),
         vec![],
         vec![],
@@ -108,7 +108,7 @@ async fn load_key_with_passphrase_correct() {
 async fn load_key_with_passphrase_wrong_returns_error() {
     let runner = RecordingRunner::new().record(
         Cmd::new("zfs")
-            .args(["load-key", "tank/encrypted"])
+            .args(["load-key", "-L", "prompt", "tank/encrypted"])
             .stdin_secret(b"wrong".to_vec()),
         vec![],
         b"Key load error: Incorrect key provided for 'tank/encrypted'.\n".to_vec(),
@@ -124,7 +124,7 @@ async fn load_key_with_passphrase_wrong_returns_error() {
 async fn load_key_with_passphrase_idempotent_when_already_loaded() {
     let runner = RecordingRunner::new().record(
         Cmd::new("zfs")
-            .args(["load-key", "tank/encrypted"])
+            .args(["load-key", "-L", "prompt", "tank/encrypted"])
             .stdin_secret(b"correct".to_vec()),
         vec![],
         fixture("err_load_key_already.stderr"),
@@ -133,4 +133,48 @@ async fn load_key_with_passphrase_idempotent_when_already_loaded() {
     load_key_with_passphrase(&runner, "tank/encrypted", b"correct")
         .await
         .expect("idempotent load_key_with_passphrase returns Ok");
+}
+
+#[tokio::test]
+async fn verify_passphrase_is_non_mutating_and_distinguishes_wrong_key() {
+    let correct = Cmd::new("zfs")
+        .args(["load-key", "-n", "-L", "prompt", "tank/encrypted"])
+        .stdin_secret(b"correct".to_vec());
+    let wrong = Cmd::new("zfs")
+        .args(["load-key", "-n", "-L", "prompt", "tank/encrypted"])
+        .stdin_secret(b"wrong".to_vec());
+    let runner = RecordingRunner::new()
+        .record(correct, vec![], vec![], 0)
+        .record(
+            wrong,
+            vec![],
+            b"Key load error: Incorrect key provided for 'tank/encrypted'.\n".to_vec(),
+            1,
+        );
+    assert!(
+        verify_passphrase(&runner, "tank/encrypted", b"correct")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !verify_passphrase(&runner, "tank/encrypted", b"wrong")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn verify_passphrase_preserves_operational_errors() {
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zfs")
+            .args(["load-key", "-n", "-L", "prompt", "tank/encrypted"])
+            .stdin_secret(b"secret".to_vec()),
+        vec![],
+        b"cannot open 'tank/encrypted': permission denied\n".to_vec(),
+        1,
+    );
+    let error = verify_passphrase(&runner, "tank/encrypted", b"secret")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, ZfsError::PermissionDenied));
 }

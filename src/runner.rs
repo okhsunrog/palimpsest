@@ -1,9 +1,11 @@
 use std::collections::HashMap;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::process::{ExitStatus, Output, Stdio};
 
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use zeroize::{Zeroize, Zeroizing};
 
 /// A planned command invocation. Owned, builder-style.
 ///
@@ -12,23 +14,25 @@ use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 /// uses it as a `HashMap` key for fixture lookup. Including stdin in the value
 /// is deliberate: tests need to distinguish responses for the same `(program,
 /// args)` invoked with different stdin (e.g., correct vs wrong passphrase).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[derive(Clone, PartialEq, Eq, Hash, Default)]
 pub struct Cmd {
-    program: String,
-    args: Vec<String>,
+    program: OsString,
+    args: Vec<OsString>,
     stdin: Option<Vec<u8>>,
     secret_stdin: bool,
 }
 
 impl Cmd {
-    pub fn new(program: impl Into<String>) -> Self {
+    pub fn new(program: impl Into<OsString>) -> Self {
         Self {
             program: program.into(),
-            ..Default::default()
+            args: Vec::new(),
+            stdin: None,
+            secret_stdin: false,
         }
     }
 
-    pub fn arg(mut self, a: impl Into<String>) -> Self {
+    pub fn arg(mut self, a: impl Into<OsString>) -> Self {
         self.args.push(a.into());
         self
     }
@@ -36,7 +40,7 @@ impl Cmd {
     pub fn args<I, S>(mut self, args: I) -> Self
     where
         I: IntoIterator<Item = S>,
-        S: Into<String>,
+        S: Into<OsString>,
     {
         self.args.extend(args.into_iter().map(Into::into));
         self
@@ -57,10 +61,10 @@ impl Cmd {
         self
     }
 
-    pub fn program(&self) -> &str {
+    pub fn program(&self) -> &OsStr {
         &self.program
     }
-    pub fn args_list(&self) -> &[String] {
+    pub fn args_list(&self) -> &[OsString] {
         &self.args
     }
     pub fn stdin_bytes(&self) -> Option<&[u8]> {
@@ -68,11 +72,38 @@ impl Cmd {
     }
 }
 
+impl Drop for Cmd {
+    fn drop(&mut self) {
+        if self.secret_stdin {
+            if let Some(stdin) = &mut self.stdin {
+                stdin.zeroize();
+            }
+        }
+    }
+}
+
+impl fmt::Debug for Cmd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut debug = f.debug_struct("Cmd");
+        debug
+            .field("program", &self.program)
+            .field("args", &self.args);
+        match (&self.stdin, self.secret_stdin) {
+            (Some(bytes), true) => {
+                debug.field("stdin", &format_args!("<redacted: {} bytes>", bytes.len()))
+            }
+            (Some(bytes), false) => debug.field("stdin", bytes),
+            (None, _) => debug.field("stdin", &Option::<&[u8]>::None),
+        };
+        debug.finish()
+    }
+}
+
 impl fmt::Display for Cmd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}", self.program)?;
+        write!(f, "{}", self.program.to_string_lossy())?;
         for a in &self.args {
-            write!(f, " {a}")?;
+            write!(f, " {}", a.to_string_lossy())?;
         }
         match (&self.stdin, self.secret_stdin) {
             (Some(b), true) => write!(f, " <secret stdin: {} bytes>", b.len())?,
@@ -155,7 +186,13 @@ impl ChildHandle {
     /// Wait for the child process to exit and return its exit status. Callers
     /// must finish reading (or drop) `stdout`/`stderr` before calling this, or
     /// run the reads concurrently on separate tasks, to avoid pipe deadlocks.
-    pub async fn wait(self) -> io::Result<ExitStatus> {
+    pub async fn wait(mut self) -> io::Result<ExitStatus> {
+        // A retained stdin can keep a receiver waiting for EOF, while retained
+        // stdout/stderr pipes can keep a producer blocked on a full buffer.
+        // Streams explicitly taken by the caller are unaffected.
+        drop(self.stdin.take());
+        drop(self.stdout.take());
+        drop(self.stderr.take());
         match self.inner {
             ChildWaiter::Process(mut c) => c.wait().await,
             ChildWaiter::Mock(code) => Ok(mock_exit_status(code)),
@@ -215,10 +252,12 @@ async fn run_with_stdin(
     mut command: tokio::process::Command,
     bytes: Vec<u8>,
 ) -> Result<Output, io::Error> {
+    let bytes = Zeroizing::new(bytes);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
     let mut child = command.spawn()?;
     let mut stdin = child.stdin.take();
     let feed = async {
@@ -236,7 +275,10 @@ impl CommandRunner for RealRunner {
     async fn run(&self, cmd: Cmd) -> Result<Output, io::Error> {
         let stdin_bytes = cmd.stdin.clone();
         let mut command = tokio::process::Command::new(&cmd.program);
-        command.args(&cmd.args);
+        command
+            .args(&cmd.args)
+            .env("LC_ALL", "C")
+            .kill_on_drop(true);
 
         match stdin_bytes {
             None => command.output().await,
@@ -248,6 +290,7 @@ impl CommandRunner for RealRunner {
         let mut command = tokio::process::Command::new(&cmd.program);
         command
             .args(&cmd.args)
+            .env("LC_ALL", "C")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -311,10 +354,25 @@ impl SshTarget {
                 None => (rest.to_string(), 22),
             }
         };
-        if host.is_empty() {
+        let target = Self { user, host, port };
+        target.validate()?;
+        Ok(target)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.user.is_empty() {
+            return Err("empty user".into());
+        }
+        if self.user.starts_with('-') {
+            return Err("SSH user cannot begin with '-'".into());
+        }
+        if self.host.is_empty() {
             return Err("empty host".into());
         }
-        Ok(Self { user, host, port })
+        if self.port == 0 {
+            return Err("SSH port must not be zero".into());
+        }
+        Ok(())
     }
 }
 
@@ -333,22 +391,37 @@ fn shell_quote(arg: &str) -> String {
     out
 }
 
-fn quote_cmdline(cmd: &Cmd) -> String {
-    let mut s = shell_quote(&cmd.program);
+fn quote_cmdline(cmd: &Cmd) -> io::Result<String> {
+    let program = cmd.program.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "SSH command program is not valid UTF-8",
+        )
+    })?;
+    // Error classification depends on the stable English diagnostics emitted
+    // by the C locale. Prefixing the remote command works even when sshd does
+    // not accept locale environment forwarding.
+    let mut s = format!("LC_ALL=C {}", shell_quote(program));
     for a in &cmd.args {
+        let a = a.to_str().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "SSH command argument is not valid UTF-8",
+            )
+        })?;
         s.push(' ');
         s.push_str(&shell_quote(a));
     }
-    s
+    Ok(s)
 }
 
 /// SSH-dispatching runner. Wraps each `Cmd` in `ssh user@host -- '<quoted>'`,
 /// forwards stdin transparently, returns the remote process's exit code,
 /// stdout, and stderr verbatim.
 ///
-/// Intended for integration tests against a throw-away VM (so that real
-/// `zfs` operations never touch the host's pools) and for arctern's
-/// `stdinserver` SSH transport.
+/// Intended for integration tests against a throw-away VM so that real `zfs`
+/// operations never touch the host's pools. Production applications should
+/// run zfskit on the ZFS host and provide their own transport boundary.
 ///
 /// Caveats:
 /// - SSH client returns exit code 255 on connection/auth failure. The remote
@@ -362,9 +435,9 @@ fn quote_cmdline(cmd: &Cmd) -> String {
 #[derive(Clone)]
 pub struct SshCommandRunner {
     target: SshTarget,
-    /// When set, dispatch via `sshpass -p <pw> ssh ...`. Used for the
-    /// archzfs test ISO which boots with empty root password. Never logged.
-    password: Option<String>,
+    /// When set, dispatch via `sshpass -e ssh ...`. The password is passed in
+    /// `SSHPASS`, never argv, and zeroized when this runner is dropped.
+    password: Option<Zeroizing<String>>,
 }
 
 impl SshCommandRunner {
@@ -381,21 +454,26 @@ impl SshCommandRunner {
         let raw = std::env::var("ZFSKIT_SSH_TARGET")
             .map_err(|_| "ZFSKIT_SSH_TARGET not set".to_string())?;
         let target = SshTarget::parse(&raw)?;
-        let password = std::env::var("ZFSKIT_SSH_PASSWORD").ok();
+        let password = std::env::var("ZFSKIT_SSH_PASSWORD")
+            .ok()
+            .map(Zeroizing::new);
         Ok(Self { target, password })
     }
 
     pub fn with_password(mut self, pw: impl Into<String>) -> Self {
-        self.password = Some(pw.into());
+        self.password = Some(Zeroizing::new(pw.into()));
         self
     }
 
     /// Build `(program, args)` for the local process that wraps `cmd` in ssh.
     /// Extracted so tests can assert on the constructed argv without spawning.
-    fn build_local_argv(&self, cmd: &Cmd) -> (String, Vec<String>) {
+    fn build_local_argv(&self, cmd: &Cmd) -> io::Result<(String, Vec<String>)> {
+        self.target
+            .validate()
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidInput, message))?;
         let mut argv: Vec<String> = Vec::new();
         let program = if self.password.is_some() {
-            argv.extend(["-p".into(), self.password.clone().unwrap(), "ssh".into()]);
+            argv.extend(["-e".into(), "ssh".into()]);
             "sshpass".to_string()
         } else {
             "ssh".to_string()
@@ -421,23 +499,26 @@ impl SshCommandRunner {
         argv.extend(["-p".into(), self.target.port.to_string()]);
         argv.push(format!("{}@{}", self.target.user, self.target.host));
         argv.push("--".into());
-        argv.push(quote_cmdline(cmd));
-        (program, argv)
+        argv.push(quote_cmdline(cmd)?);
+        Ok((program, argv))
     }
 
-    fn build_command(&self, cmd: &Cmd) -> tokio::process::Command {
-        let (program, argv) = self.build_local_argv(cmd);
+    fn build_command(&self, cmd: &Cmd) -> io::Result<tokio::process::Command> {
+        let (program, argv) = self.build_local_argv(cmd)?;
         let mut local = tokio::process::Command::new(program);
-        local.args(argv);
-        local
+        local.args(argv).env("LC_ALL", "C").kill_on_drop(true);
+        if let Some(password) = &self.password {
+            local.env("SSHPASS", password.as_str());
+        }
+        Ok(local)
     }
 }
 
 #[async_trait::async_trait]
 impl CommandRunner for SshCommandRunner {
     async fn run(&self, cmd: Cmd) -> Result<Output, io::Error> {
+        let local = self.build_command(&cmd)?;
         let stdin_bytes = cmd.stdin_bytes().map(<[u8]>::to_vec);
-        let local = self.build_command(&cmd);
         match stdin_bytes {
             None => {
                 let mut local = local;
@@ -448,11 +529,12 @@ impl CommandRunner for SshCommandRunner {
     }
 
     async fn spawn(&self, cmd: Cmd) -> Result<ChildHandle, io::Error> {
-        let mut local = self.build_command(&cmd);
+        let mut local = self.build_command(&cmd)?;
         local
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
         let child = local.spawn()?;
         Ok(ChildHandle::from_process(child))
     }
@@ -591,6 +673,9 @@ mod tests {
             format!("{cmd}"),
             "zfs load-key tank <secret stdin: 7 bytes>"
         );
+        let debug = format!("{cmd:?}");
+        assert!(debug.contains("<redacted: 7 bytes>"));
+        assert!(!debug.contains("104, 117, 110, 116, 101, 114, 50"));
     }
 
     #[test]
@@ -754,6 +839,13 @@ mod tests {
     }
 
     #[test]
+    fn ssh_target_parse_rejects_invalid_user_and_port() {
+        assert!(SshTarget::parse("@host").is_err());
+        assert!(SshTarget::parse("-oProxyCommand=bad@host").is_err());
+        assert!(SshTarget::parse("host:0").is_err());
+    }
+
+    #[test]
     fn ssh_target_parse_bare_ipv6_takes_whole_as_host() {
         let t = SshTarget::parse("root@::1").unwrap();
         assert_eq!(t.host, "::1");
@@ -809,10 +901,21 @@ mod tests {
         assert!(out.status.success());
     }
 
+    #[tokio::test]
+    async fn real_runner_forces_stable_c_locale() {
+        let out = RealRunner
+            .run(Cmd::new("sh").args(["-c", "printf %s \"$LC_ALL\""]))
+            .await
+            .unwrap();
+        assert_eq!(out.stdout, b"C");
+    }
+
     #[test]
     fn ssh_runner_argv_pubkey_mode() {
         let r = SshCommandRunner::new(SshTarget::new("root", "localhost", 2225));
-        let (prog, argv) = r.build_local_argv(&Cmd::new("zfs").args(["list", "-j"]));
+        let (prog, argv) = r
+            .build_local_argv(&Cmd::new("zfs").args(["list", "-j"]))
+            .unwrap();
         assert_eq!(prog, "ssh");
         assert_eq!(
             argv,
@@ -829,28 +932,35 @@ mod tests {
                 "2225",
                 "root@localhost",
                 "--",
-                "'zfs' 'list' '-j'",
+                "LC_ALL=C 'zfs' 'list' '-j'",
             ]
         );
     }
 
     #[test]
     fn ssh_runner_argv_password_mode_uses_sshpass() {
-        let r = SshCommandRunner::new(SshTarget::new("root", "localhost", 2225)).with_password("");
-        let (prog, argv) = r.build_local_argv(&Cmd::new("echo").arg("ok"));
+        let r = SshCommandRunner::new(SshTarget::new("root", "localhost", 2225))
+            .with_password("super-secret");
+        let (prog, argv) = r.build_local_argv(&Cmd::new("echo").arg("ok")).unwrap();
         assert_eq!(prog, "sshpass");
-        assert_eq!(&argv[0..3], &["-p", "", "ssh"]);
+        assert_eq!(&argv[0..2], &["-e", "ssh"]);
+        assert!(!argv.iter().any(|arg| arg.contains("super-secret")));
         assert!(argv.contains(&"PreferredAuthentications=password".to_string()));
         assert!(argv.contains(&"PubkeyAuthentication=no".to_string()));
         assert!(!argv.contains(&"BatchMode=yes".to_string()));
-        assert_eq!(argv.last().unwrap(), "'echo' 'ok'");
+        assert_eq!(argv.last().unwrap(), "LC_ALL=C 'echo' 'ok'");
     }
 
     #[test]
     fn ssh_runner_argv_quotes_arg_with_single_quote() {
         let r = SshCommandRunner::new(SshTarget::new("root", "h", 22));
-        let (_, argv) = r.build_local_argv(&Cmd::new("sh").args(["-c", "echo it's me"]));
-        assert_eq!(argv.last().unwrap(), "'sh' '-c' 'echo it'\\''s me'");
+        let (_, argv) = r
+            .build_local_argv(&Cmd::new("sh").args(["-c", "echo it's me"]))
+            .unwrap();
+        assert_eq!(
+            argv.last().unwrap(),
+            "LC_ALL=C 'sh' '-c' 'echo it'\\''s me'"
+        );
     }
 
     #[tokio::test]
@@ -890,6 +1000,65 @@ mod tests {
             .expect("wait completes promptly after start_kill")
             .expect("wait returns a status");
         assert!(!status.success(), "killed child must report non-success");
+    }
+
+    #[tokio::test]
+    async fn wait_closes_untaken_stdin_before_waiting() {
+        let handle = RealRunner.spawn(Cmd::new("cat")).await.unwrap();
+        let status = tokio::time::timeout(std::time::Duration::from_secs(2), handle.wait())
+            .await
+            .expect("wait must close retained stdin")
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[tokio::test]
+    async fn real_runner_run_is_killed_when_future_is_cancelled() {
+        let marker = std::env::temp_dir().join(format!("zfskit-cancel-{}", std::process::id()));
+        let script = format!("echo $$ > {}; sleep 30", marker.display());
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            RealRunner.run(Cmd::new("sh").args(["-c", &script])),
+        )
+        .await;
+        assert!(
+            result.is_err(),
+            "command should still be running at timeout"
+        );
+        let pid: u32 = std::fs::read_to_string(&marker)
+            .expect("child wrote pid")
+            .trim()
+            .parse()
+            .unwrap();
+        let mut gone = false;
+        for _ in 0..20 {
+            if !std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+            {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let _ = std::fs::remove_file(marker);
+        assert!(gone, "cancelled run child {pid} remained alive");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ssh_runner_rejects_non_utf8_arguments() {
+        use std::os::unix::ffi::OsStringExt;
+        let runner = SshCommandRunner::new(SshTarget::new("root", "localhost", 22));
+        let error = runner
+            .run(Cmd::new("zfs").arg(OsString::from_vec(vec![0xff])))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[tokio::test]

@@ -22,16 +22,16 @@ by real consumers.
   only interface OpenZFS actually stabilises, it needs no C toolchain or
   kernel-matched headers, and a `zfs` binary over SSH works exactly like a
   local one.
-- **JSON output, not tab-splitting.** Structured `-j` output (OpenZFS ≥ 2.2)
+- **JSON output, not tab-splitting.** Structured `-j` output (OpenZFS ≥ 2.3)
   is parsed into serde models; version-tolerant where field sets drift
   between ZFS releases.
-- **Async-only.** Processes are spawned via `tokio::process`; bulk streams
-  (`zfs send` stdout, `zfs recv` stdin) are exposed as child handles you
-  pipe yourself, so the caller owns throttling, progress, and cancellation.
-- **Every operation is testable without ZFS.** All functions take a
-  `&dyn CommandRunner`; `RealRunner` executes locally, `SshCommandRunner`
-  executes on a remote host, and `RecordingRunner` replays captured fixtures
-  in unit tests.
+- **Async-only and cancellation-safe.** Processes are spawned via
+  `tokio::process`; buffered commands are killed when their future is dropped,
+  while typed send/receive processes expose explicit `finish()` and `cancel()`.
+- **Every operation is testable without ZFS.** `Zfs` accepts a custom
+  `CommandRunner`; `RealRunner` executes locally, `SshCommandRunner` executes
+  on a remote host, and `RecordingRunner` replays captured fixtures in unit
+  tests. The runner remains available as an advanced escape hatch.
 - **Errors are classified**, not stringly: `ZfsError` distinguishes
   dataset-not-found, snapshot-held, permission, busy-pool and friends by
   parsing stderr, so callers can branch on the failure mode.
@@ -40,11 +40,11 @@ by real consumers.
 
 | Area | Operations |
 |---|---|
-| Datasets | list / get / set / create / destroy / rename / mount / snapshot / rollback |
+| Datasets | list / get / set / create / destroy / mount / snapshot / rollback |
 | Pools | list / status (vdev tree, scan state) / create / destroy / import / export / discover / scrub (start·pause·resume·stop) / get / set |
 | Replication | `zfs send` (raw/embedded/compressed/large-blocks, incremental from snapshot or bookmark, resume tokens) · `zfs recv` (`-s`/`-u`/`-F`, `-o`/`-x` property control) · dry-run size estimation · resume-token parsing and validation · `recv -A` partial-state abort |
 | Protection | holds (idempotent hold/release, batch inspection) · bookmarks (GUID-anchored create/list/destroy) |
-| Encryption | load-key / unload-key / change-key / keystatus / passphrase verification |
+| Encryption | load-key / unload-key / property inspection / non-mutating passphrase verification |
 | System | ARC statistics from `/proc/spl/kstat/zfs/arcstats` |
 
 ## Example
@@ -74,7 +74,7 @@ async fn main() -> Result<(), zfskit::ZfsError> {
     }
 
     // Take a snapshot.
-    let ds = zfs.dataset("tank/data");
+    let ds = zfs.dataset("tank/data")?;
     ds.snapshot("backup_2026-07-09", &Default::default()).await?;
     Ok(())
 }
@@ -83,18 +83,25 @@ async fn main() -> Result<(), zfskit::ZfsError> {
 Replication is the same primitives with the stream left to you:
 
 ```rust
-use zfskit::send::{SendArgs, send};
-use zfskit::recv::{RecvArgs, recv};
-use zfskit::runner::RealRunner;
+use tokio::io::AsyncWriteExt;
+use zfskit::send::SendArgs;
+use zfskit::recv::RecvArgs;
 
-let runner = RealRunner;
-let mut src = send(&runner, &SendArgs::new("tank/data@snap").raw()).await?;
-let mut dst = recv(&runner, &RecvArgs::new("backup/data").resumable().unmounted()).await?;
-// pipe src.stdout -> dst.stdin however you like: tokio::io::copy,
-// a throttled loop, an SSH channel...
+let zfs = zfskit::Zfs::new();
+let mut src = zfs.send(&SendArgs::new("tank/data@snap").raw()).await?;
+let mut dst = zfs.receive(&RecvArgs::new("backup/data").resumable().unmounted()).await?;
+let mut stdout = src.take_stdout().expect("send stdout");
+let mut stdin = dst.take_stdin().expect("recv stdin");
+tokio::io::copy(&mut stdout, &mut stdin).await?;
+stdin.shutdown().await?;
+drop(stdin);
+src.finish().await?;
+dst.finish().await?;
 ```
 
-Remote execution swaps the runner, nothing else:
+The SSH runner is intended for development and integration tests against a
+disposable remote ZFS host. Production applications should run zfskit on the
+ZFS host or provide a transport with explicit remote lifecycle guarantees:
 
 ```rust
 use zfskit::{SshTarget, SshCommandRunner, Zfs};
@@ -113,7 +120,8 @@ the repo's `justfile` boots a QEMU VM for that.
 
 ## Requirements
 
-- OpenZFS ≥ 2.2 (JSON output) on the host that runs the commands — local or
+- Rust 1.85 or newer (the crate uses the Rust 2024 edition).
+- OpenZFS ≥ 2.3 (JSON output) on the host that runs the commands — local or
   at the far end of the SSH runner.
 - Linux. The ARC-stats module reads `/proc/spl/kstat`; everything else is
   CLI-portable in principle, but only Linux is tested.

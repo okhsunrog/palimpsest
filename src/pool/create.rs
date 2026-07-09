@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::error::{ZfsError, classify_stderr};
+use crate::names::PoolName;
 use crate::runner::{Cmd, CommandRunner};
 
 /// RAID-Z parity level. Encodes the wire syntax `raidz1` / `raidz2` / `raidz3`.
@@ -58,11 +59,20 @@ impl Vdev {
         }
     }
 
-    fn is_empty(&self) -> bool {
-        match self {
-            Vdev::Stripe(d) | Vdev::Mirror(d) => d.is_empty(),
-            Vdev::RaidZ(_, d) => d.is_empty(),
+    fn validate(&self) -> Result<(), ZfsError> {
+        let (kind, minimum, actual) = match self {
+            Vdev::Stripe(devices) => ("stripe", 1, devices.len()),
+            Vdev::Mirror(devices) => ("mirror", 2, devices.len()),
+            Vdev::RaidZ(RaidZLevel::One, devices) => ("raidz1", 2, devices.len()),
+            Vdev::RaidZ(RaidZLevel::Two, devices) => ("raidz2", 3, devices.len()),
+            Vdev::RaidZ(RaidZLevel::Three, devices) => ("raidz3", 4, devices.len()),
+        };
+        if actual < minimum {
+            return Err(ZfsError::InvalidInput {
+                message: format!("{kind} vdev requires at least {minimum} device(s), got {actual}"),
+            });
         }
+        Ok(())
     }
 }
 
@@ -131,13 +141,14 @@ impl PoolCreateOptions {
     }
 
     pub fn build_args(&self) -> Result<Vec<String>, ZfsError> {
-        if self.vdevs.is_empty() || self.vdevs.iter().any(Vdev::is_empty) {
-            return Err(ZfsError::Other {
-                exit_code: None,
-                stderr:
-                    "PoolCreateOptions::vdevs must have at least one vdev with at least one device"
-                        .to_string(),
+        PoolName::parse_for_create(&self.name)?;
+        if self.vdevs.is_empty() {
+            return Err(ZfsError::InvalidInput {
+                message: "PoolCreateOptions::vdevs must contain at least one vdev".to_string(),
             });
+        }
+        for vdev in &self.vdevs {
+            vdev.validate()?;
         }
         let mut args: Vec<String> = vec!["create".into()];
         if self.force {
@@ -189,6 +200,15 @@ mod tests {
             opts.build_args().unwrap(),
             vec!["create", "tank", "/dev/sda1"]
         );
+    }
+
+    #[test]
+    fn build_args_rejects_invalid_pool_name() {
+        let error = PoolCreateOptions::new("raidz2-test")
+            .vdev(Vdev::Stripe(vec![PathBuf::from("/dev/sda")]))
+            .build_args()
+            .unwrap_err();
+        assert!(matches!(error, ZfsError::InvalidName(_)));
     }
 
     #[test]
@@ -280,10 +300,10 @@ mod tests {
     fn build_args_rejects_no_vdevs() {
         let opts = PoolCreateOptions::new("tank");
         let err = opts.build_args().expect_err("empty vdevs must error");
-        let ZfsError::Other { stderr, .. } = err else {
-            panic!("expected Other");
+        let ZfsError::InvalidInput { message } = err else {
+            panic!("expected InvalidInput");
         };
-        assert!(stderr.contains("at least one vdev"));
+        assert!(message.contains("at least one vdev"));
     }
 
     #[test]

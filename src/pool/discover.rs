@@ -20,7 +20,7 @@
 //! (often to stderr, with a non-zero exit code). Our `discover()` combines
 //! stdout+stderr because OpenZFS isn't always consistent about which stream
 //! the pool list lands on, mirroring archinstall_zfs's prior behavior.
-use crate::error::ZfsError;
+use crate::error::{ZfsError, classify_stderr};
 use crate::runner::{Cmd, CommandRunner};
 
 /// One importable pool surfaced by `zpool import`. Carries enough to render
@@ -84,11 +84,21 @@ pub fn parse_discovery(text: &str) -> Vec<DiscoveredPool> {
 pub async fn discover(runner: &dyn CommandRunner) -> Result<Vec<DiscoveredPool>, ZfsError> {
     let output = runner.run(Cmd::new("zpool").arg("import")).await?;
     let combined = format!(
-        "{}{}",
+        "{}\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
-    Ok(parse_discovery(&combined))
+    let pools = parse_discovery(&combined);
+    if output.status.success() || !pools.is_empty() {
+        return Ok(pools);
+    }
+    if combined.contains("no pools available to import") {
+        return Ok(Vec::new());
+    }
+    Err(classify_stderr(
+        &String::from_utf8_lossy(&output.stderr),
+        output.status.code(),
+    ))
 }
 
 #[cfg(test)]

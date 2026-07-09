@@ -86,11 +86,10 @@ impl ArcStats {
     /// Hit ratio over all accesses. NaN when no traffic has been observed
     /// yet — callers typically render NaN as `—`.
     pub fn hit_ratio(&self) -> f64 {
-        let total = self.hits + self.misses;
-        if total == 0 {
+        if self.hits == 0 && self.misses == 0 {
             f64::NAN
         } else {
-            self.hits as f64 / total as f64
+            self.hits as f64 / (self.hits as f64 + self.misses as f64)
         }
     }
 }

@@ -6,22 +6,66 @@ pub use dry_run::{DryRunSize, SendKind, dry_run};
 
 use crate::error::ZfsError;
 use crate::runner::{ChildHandle, Cmd, CommandRunner};
+use tokio::io::{AsyncRead, AsyncReadExt};
 
-/// `zfs send [flags] <snapshot>` — spawn the send process and return a
-/// [`ChildHandle`]. Callers read the byte stream from `child.stdout` and pipe
-/// it to the receiver. Call `child.wait()` after consuming all output.
+/// Running `zfs send` process with stderr drained from the moment it starts.
+pub struct SendProcess {
+    child: ChildHandle,
+    stderr: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+}
+
+impl SendProcess {
+    pub fn take_stdout(&mut self) -> Option<Box<dyn AsyncRead + Unpin + Send>> {
+        self.child.stdout.take()
+    }
+
+    pub async fn finish(self) -> Result<(), ZfsError> {
+        let status = self.child.wait().await.map_err(ZfsError::Spawn)?;
+        let stderr = self.stderr.await.map_err(|error| ZfsError::Other {
+            exit_code: status.code(),
+            stderr: format!("send stderr task failed: {error}"),
+        })??;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(crate::error::classify_stderr(
+                &String::from_utf8_lossy(&stderr),
+                status.code(),
+            ))
+        }
+    }
+
+    pub async fn cancel(mut self) -> Result<(), ZfsError> {
+        self.child.start_kill().map_err(ZfsError::Spawn)?;
+        let _ = self.child.wait().await.map_err(ZfsError::Spawn)?;
+        let _ = self.stderr.await;
+        Ok(())
+    }
+}
+
+/// `zfs send [flags] <snapshot>` — spawn a managed send process. Callers take
+/// and consume stdout, then call [`SendProcess::finish`]; stderr is drained
+/// concurrently and a non-zero exit becomes a classified [`ZfsError`].
 ///
-/// When `args.from` is a `ResumeToken`, the snapshot field is ignored and
-/// `-t <token>` is passed instead.
-pub async fn send(runner: &dyn CommandRunner, args: &SendArgs) -> Result<ChildHandle, ZfsError> {
-    let cmd_args = args.build_args(false).map_err(|e| ZfsError::Other {
-        exit_code: None,
-        stderr: e.to_string(),
-    })?;
-    runner
+/// Use [`SendArgs::resume`] for a resume token. OpenZFS rejects replication
+/// and property-package flags in combination with `-t`; stream feature flags
+/// are accepted and combined with the capabilities encoded in the token.
+pub async fn send(runner: &dyn CommandRunner, args: &SendArgs) -> Result<SendProcess, ZfsError> {
+    let cmd_args = args.build_args(false)?;
+    let mut child = runner
         .spawn(Cmd::new("zfs").args(cmd_args))
         .await
-        .map_err(ZfsError::Spawn)
+        .map_err(ZfsError::Spawn)?;
+    let mut stderr = child.stderr.take().ok_or_else(|| ZfsError::Other {
+        exit_code: None,
+        stderr: "zfs send runner did not provide stderr".to_string(),
+    })?;
+    let stderr = tokio::spawn(async move {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).await?;
+        Ok(bytes)
+    });
+    Ok(SendProcess { child, stderr })
 }
 
 #[cfg(test)]
@@ -41,15 +85,11 @@ mod tests {
         let args = SendArgs::new("tank/data/home@snap1");
         let mut handle = send(&runner, &args).await.expect("send spawns");
         let mut buf = Vec::new();
-        handle
-            .stdout
-            .as_mut()
-            .unwrap()
-            .read_to_end(&mut buf)
-            .await
-            .unwrap();
+        let mut stdout = handle.take_stdout().unwrap();
+        stdout.read_to_end(&mut buf).await.unwrap();
+        drop(stdout);
         assert_eq!(buf, b"fake-zfs-stream-bytes");
-        assert!(handle.wait().await.unwrap().success());
+        handle.finish().await.unwrap();
     }
 
     #[tokio::test]
@@ -73,7 +113,7 @@ mod tests {
             vec![],
             0,
         );
-        let args = SendArgs::new("ignored").resume_token(token);
+        let args = SendArgs::resume(token);
         send(&runner, &args)
             .await
             .expect("resume token send spawns");

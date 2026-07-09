@@ -26,12 +26,10 @@ pub struct DryRunSize {
 /// `SendArgsError` if `args` has a resume token source (use
 /// `resume_token::decode()` instead).
 ///
-/// **Output goes to stdout** in OpenZFS ≥ 2.2 with `-P` (parseable mode).
+/// **Output goes to stdout** in supported OpenZFS releases with `-P`
+/// (parseable mode).
 pub async fn dry_run(runner: &dyn CommandRunner, args: &SendArgs) -> Result<DryRunSize, ZfsError> {
-    let cmd_args = args.build_args(true).map_err(|e| ZfsError::Other {
-        exit_code: None,
-        stderr: e.to_string(),
-    })?;
+    let cmd_args = args.build_args(true)?;
     let output = runner.run(Cmd::new("zfs").args(cmd_args)).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

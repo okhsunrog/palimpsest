@@ -12,9 +12,8 @@ pub struct GetOptions {
 impl GetOptions {
     pub fn build_args(&self) -> Result<Vec<String>, ZfsError> {
         if self.properties.is_empty() {
-            return Err(ZfsError::Other {
-                exit_code: None,
-                stderr:
+            return Err(ZfsError::InvalidInput {
+                message:
                     "GetOptions::properties must not be empty (use vec![\"all\".into()] for all)"
                         .to_string(),
             });
@@ -39,10 +38,11 @@ pub async fn get(
         return Err(classify_stderr(&stderr, output.status.code()));
     }
     let parsed: ZpoolGetOutput =
-        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Other {
-            exit_code: output.status.code(),
-            stderr: format!("failed to parse zpool get -j output: {e}"),
+        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Parse {
+            command: "zpool get",
+            message: e.to_string(),
         })?;
+    parsed.output_version.validate("zpool get")?;
     let mut entries: Vec<ZpoolGetEntry> = parsed.pools.into_values().collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)

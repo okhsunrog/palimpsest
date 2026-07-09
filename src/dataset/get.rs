@@ -17,9 +17,8 @@ pub struct GetOptions {
 impl GetOptions {
     pub fn build_args(&self) -> Result<Vec<String>, ZfsError> {
         if self.properties.is_empty() {
-            return Err(ZfsError::Other {
-                exit_code: None,
-                stderr:
+            return Err(ZfsError::InvalidInput {
+                message:
                     "GetOptions::properties must not be empty (use vec![\"all\".into()] for all)"
                         .to_string(),
             });
@@ -71,10 +70,11 @@ pub async fn get(
         return Err(classify_stderr(&stderr, output.status.code()));
     }
     let parsed: ZfsGetOutput =
-        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Other {
-            exit_code: output.status.code(),
-            stderr: format!("failed to parse zfs get -j output: {e}"),
+        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Parse {
+            command: "zfs get",
+            message: e.to_string(),
         })?;
+    parsed.output_version.validate("zfs get")?;
     let mut entries: Vec<ZfsGetEntry> = parsed.datasets.into_values().collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)
@@ -156,9 +156,9 @@ mod tests {
     fn build_args_rejects_empty_properties() {
         let opts = GetOptions::default();
         let err = opts.build_args().expect_err("empty properties must error");
-        let ZfsError::Other { stderr, .. } = err else {
-            panic!("expected Other");
+        let ZfsError::InvalidInput { message } = err else {
+            panic!("expected InvalidInput");
         };
-        assert!(stderr.contains("must not be empty"));
+        assert!(message.contains("must not be empty"));
     }
 }

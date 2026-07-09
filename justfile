@@ -121,5 +121,9 @@ test-integration:
 # clean check. For inner-loop dev: `just vm-up` once, then `just test-integration`
 # many times.
 test-vm: vm-up
-    just test-integration
+    #!/usr/bin/env bash
+    set -uo pipefail
+    rc=0
+    just test-integration || rc=$?
     just vm-down
+    exit "$rc"

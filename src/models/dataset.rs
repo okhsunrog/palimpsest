@@ -15,7 +15,9 @@ pub struct ZfsListEntry {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: DatasetType,
+    #[serde(default)]
     pub pool: String,
+    #[serde(default)]
     pub createtxg: String,
 
     // Present only on SNAPSHOT entries: the parent filesystem and the part after `@`.

@@ -11,7 +11,7 @@ See `docs/constitution.md` for the durable design decisions and `docs/specs/` fo
 - Add deps via `cargo add`. Do not hand-edit version strings in Cargo.toml.
 - Errors via `thiserror`. No `anyhow`/`eyre` in this library — those belong at the application boundary.
 - Tests use `RecordingRunner` against captured JSON fixtures in `tests/fixtures/`. Unit tests must not invoke real `zfs(8)`.
-- Prefer `-j` (native ZFS JSON output) over tab-splitting. Require OpenZFS ≥ 2.2.
+- Prefer `-j` (native ZFS JSON output) over tab-splitting. Require OpenZFS ≥ 2.3.
 - No `libzfs`/`libzfs_core` FFI. CLI-only. This is deliberate; see `docs/constitution.md`.
 - Comment only the WHY, never the WHAT. Default to no comment.
 - No emojis in code, comments, or commit messages.

@@ -3,8 +3,32 @@ use std::sync::OnceLock;
 use regex::Regex;
 use thiserror::Error;
 
+use crate::names::NameError;
+
 #[derive(Error, Debug)]
+#[non_exhaustive]
 pub enum ZfsError {
+    #[error(transparent)]
+    InvalidName(#[from] NameError),
+
+    #[error("invalid operation input: {message}")]
+    InvalidInput { message: String },
+
+    #[error("failed to parse {command} output: {message}")]
+    Parse {
+        command: &'static str,
+        message: String,
+    },
+
+    #[error("unsupported {command} output version {major}.{minor}")]
+    IncompatibleOutput {
+        command: &'static str,
+        major: u32,
+        minor: u32,
+    },
+
+    #[error("bookmark {bookmark} already exists for a different snapshot")]
+    BookmarkConflict { bookmark: String },
     #[error("dataset not found: {name}")]
     DatasetNotFound { name: String },
 
@@ -29,7 +53,7 @@ pub enum ZfsError {
     #[error("out of space")]
     NoSpace,
 
-    #[error("failed to spawn zfs: {0}")]
+    #[error("failed to execute ZFS command: {0}")]
     Spawn(#[from] std::io::Error),
 
     #[error("zfs exited with {exit_code:?}: {stderr}")]
@@ -50,14 +74,15 @@ fn dataset_not_found_re() -> &'static Regex {
 fn busy_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"cannot [a-z ]+ '([^']+)': dataset is busy").expect("busy regex compiles")
+        Regex::new(r"cannot [a-z ]+ '([^']+)': (?:dataset|pool) is busy")
+            .expect("busy regex compiles")
     })
 }
 
 fn snapshot_held_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"cannot destroy snapshot ([^:]+): it's being held")
+        Regex::new(r"cannot destroy snapshot (.+): it's being held")
             .expect("snapshot_held regex compiles")
     })
 }
@@ -85,7 +110,9 @@ const KEY_NOT_LOADED_MARKER: &str = "Key must be loaded";
 fn pool_not_found_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
-        Regex::new(r"cannot import '([^']+)': no such pool available")
+        Regex::new(
+            r"(?m)cannot (?:open|import|destroy|export) '([^']+)': (?:no such pool available|no such pool)\s*$",
+        )
             .expect("pool_not_found regex compiles")
     })
 }
@@ -180,6 +207,12 @@ mod tests {
     }
 
     #[test]
+    fn classifies_busy_pool() {
+        let err = classify_stderr("cannot export 'tank': pool is busy\n", Some(1));
+        assert!(matches!(err, ZfsError::Busy { name } if name == "tank"));
+    }
+
+    #[test]
     fn classifies_snapshot_held() {
         let err = classify_stderr(
             "cannot destroy snapshot tank/data/home@snap1: it's being held. \
@@ -190,6 +223,16 @@ mod tests {
             panic!("expected SnapshotHeld, got {err:?}");
         };
         assert_eq!(name, "tank/data/home@snap1");
+    }
+
+    #[test]
+    fn classifies_snapshot_held_when_name_contains_colon() {
+        let err = classify_stderr(
+            "cannot destroy snapshot tank/data:v1@snap:old: it's being held. \
+             Run 'zfs holds -r tank/data:v1@snap:old' to see holders.\n",
+            Some(1),
+        );
+        assert!(matches!(err, ZfsError::SnapshotHeld { name } if name == "tank/data:v1@snap:old"));
     }
 
     #[test]
@@ -230,6 +273,12 @@ mod tests {
             panic!("expected PoolNotFound, got {err:?}");
         };
         assert_eq!(name, "tank");
+    }
+
+    #[test]
+    fn classifies_pool_not_found_from_zpool_list() {
+        let err = classify_stderr("cannot open 'missing': no such pool\n", Some(1));
+        assert!(matches!(err, ZfsError::PoolNotFound { name } if name == "missing"));
     }
 
     #[test]

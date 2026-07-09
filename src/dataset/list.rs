@@ -59,10 +59,11 @@ pub async fn list(
         return Err(classify_stderr(&stderr, output.status.code()));
     }
     let parsed: ZfsListOutput =
-        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Other {
-            exit_code: output.status.code(),
-            stderr: format!("failed to parse zfs list -j output: {e}"),
+        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Parse {
+            command: "zfs list",
+            message: e.to_string(),
         })?;
+    parsed.output_version.validate("zfs list")?;
     let mut entries: Vec<ZfsListEntry> = parsed.datasets.into_values().collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)

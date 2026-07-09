@@ -1,5 +1,4 @@
 use crate::error::{ZfsError, classify_stderr};
-use crate::pool::{ExportOptions, ImportOptions};
 use crate::runner::{Cmd, CommandRunner};
 
 // Idempotency markers captured from real OpenZFS 2.4.1 stderr.
@@ -56,7 +55,7 @@ pub async fn load_key_with_passphrase(
     let output = runner
         .run(
             Cmd::new("zfs")
-                .args(["load-key", dataset])
+                .args(["load-key", "-L", "prompt", dataset])
                 .stdin_secret(passphrase.to_vec()),
         )
         .await?;
@@ -95,66 +94,29 @@ pub async fn load_key_with_keylocation(
     Err(classify_stderr(&stderr, output.status.code()))
 }
 
-// Best-effort check whether a pool's root dataset has encryption enabled.
-// The pool is imported ephemerally with `-fN` (force, no mount), the
-// `encryption` property on the root dataset is read, and the pool is
-// unload-keyed and exported. Cleanup steps are best-effort; only the
-// initial import error is propagated.
-//
-// Returns `Ok(true)` when encryption is set to anything other than `off`,
-// `Ok(false)` when it is `off` or the property is missing, and `Err(...)`
-// when the pool cannot be imported (typical "no such pool available").
-pub async fn is_pool_encrypted(
+/// Verify a passphrase without changing key state.
+///
+/// The dataset must already be imported. Only OpenZFS's explicit incorrect-key
+/// response maps to `Ok(false)`; transport, permission, and other failures are
+/// returned to the caller.
+pub async fn verify_passphrase(
     runner: &dyn CommandRunner,
-    pool_name: &str,
-) -> Result<bool, ZfsError> {
-    let import_opts = ImportOptions {
-        force: true,
-        no_mount: true,
-        ..Default::default()
-    };
-    crate::pool::import(runner, pool_name, &import_opts).await?;
-
-    let encrypted = match crate::dataset::get_property(runner, pool_name, "encryption").await {
-        Ok(p) => p.value != "off" && !p.value.is_empty(),
-        Err(_) => false,
-    };
-
-    let _ = unload_key(runner, pool_name).await;
-    let _ = crate::pool::export(runner, pool_name, &ExportOptions::default()).await;
-
-    Ok(encrypted)
-}
-
-// Best-effort verification of a pool's passphrase. Imports the pool
-// ephemerally, attempts a `zfs load-key` with the passphrase fed via stdin,
-// then unload-keys and exports. The passphrase never touches the filesystem.
-//
-// Returns `Ok(true)` when the key loads, `Ok(false)` when load-key is
-// rejected (wrong passphrase), and `Err(...)` when the pool cannot be
-// imported. A best-effort pre-clean `unload_key` is issued after import so
-// that `load_key_with_passphrase` always starts from an unloaded state and
-// its idempotency on "already loaded" doesn't mask a wrong passphrase.
-pub async fn verify_pool_passphrase(
-    runner: &dyn CommandRunner,
-    pool_name: &str,
+    dataset: &str,
     passphrase: &[u8],
 ) -> Result<bool, ZfsError> {
-    let import_opts = ImportOptions {
-        force: true,
-        no_mount: true,
-        ..Default::default()
-    };
-    crate::pool::import(runner, pool_name, &import_opts).await?;
-
-    let _ = unload_key(runner, pool_name).await;
-
-    let verified = load_key_with_passphrase(runner, pool_name, passphrase)
-        .await
-        .is_ok();
-
-    let _ = unload_key(runner, pool_name).await;
-    let _ = crate::pool::export(runner, pool_name, &ExportOptions::default()).await;
-
-    Ok(verified)
+    let output = runner
+        .run(
+            Cmd::new("zfs")
+                .args(["load-key", "-n", "-L", "prompt", dataset])
+                .stdin_secret(passphrase.to_vec()),
+        )
+        .await?;
+    if output.status.success() {
+        return Ok(true);
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("Incorrect key provided") {
+        return Ok(false);
+    }
+    Err(classify_stderr(&stderr, output.status.code()))
 }

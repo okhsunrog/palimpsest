@@ -60,6 +60,11 @@ pub async fn snapshot_many(
     snapshots: &[&str],
     opts: &SnapshotOptions,
 ) -> Result<(), ZfsError> {
+    if snapshots.is_empty() {
+        return Err(ZfsError::InvalidInput {
+            message: "snapshot_many requires at least one snapshot".to_string(),
+        });
+    }
     let output = runner
         .run(Cmd::new("zfs").args(opts.build_args(snapshots)))
         .await?;

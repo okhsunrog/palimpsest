@@ -12,10 +12,11 @@ pub async fn status(runner: &dyn CommandRunner, pool: &str) -> Result<ZpoolStatu
         return Err(classify_stderr(&stderr, output.status.code()));
     }
     let parsed: ZpoolStatusOutput =
-        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Other {
-            exit_code: output.status.code(),
-            stderr: format!("failed to parse zpool status -j output: {e}"),
+        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Parse {
+            command: "zpool status",
+            message: e.to_string(),
         })?;
+    parsed.output_version.validate("zpool status")?;
     parsed
         .pools
         .into_values()
@@ -34,10 +35,11 @@ pub async fn status_all(runner: &dyn CommandRunner) -> Result<Vec<ZpoolStatusEnt
         return Err(classify_stderr(&stderr, output.status.code()));
     }
     let parsed: ZpoolStatusOutput =
-        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Other {
-            exit_code: output.status.code(),
-            stderr: format!("failed to parse zpool status -j output: {e}"),
+        serde_json::from_slice(&output.stdout).map_err(|e| ZfsError::Parse {
+            command: "zpool status",
+            message: e.to_string(),
         })?;
+    parsed.output_version.validate("zpool status")?;
     let mut entries: Vec<ZpoolStatusEntry> = parsed.pools.into_values().collect();
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(entries)

@@ -1,5 +1,5 @@
 use zfskit::pool::{DiscoveredPool, discover};
-use zfskit::{Cmd, RecordingRunner};
+use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
@@ -58,4 +58,22 @@ async fn discover_combines_stdout_and_stderr() {
     );
     let pools = discover(&runner).await.expect("discover succeeds");
     assert_eq!(pools.len(), 2);
+}
+
+#[tokio::test]
+async fn discover_does_not_hide_transport_failure() {
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zpool").arg("import"),
+        vec![],
+        b"ssh: connect to host nas: Connection refused\n".to_vec(),
+        255,
+    );
+    let error = discover(&runner).await.unwrap_err();
+    assert!(matches!(
+        error,
+        ZfsError::Other {
+            exit_code: Some(255),
+            ..
+        }
+    ));
 }

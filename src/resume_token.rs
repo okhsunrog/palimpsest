@@ -22,7 +22,7 @@ pub enum ResumeTokenError {
 /// sender to generate a stream that resumes exactly where the last one stopped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResumeToken {
-    /// The raw token string (pass to `SendArgs::resume_token()`).
+    /// The raw token string (pass to `SendArgs::resume()`).
     pub token: String,
     /// Dataset@snapshot name the stream is destined for.
     pub to_name: String,
@@ -78,10 +78,10 @@ fn parse_nvlist_output(text: &str, token: &str) -> Result<ResumeToken, ResumeTok
 
     for line in text.lines() {
         // nvlist fields are tab-indented: "\tkey = value"
-        if let Some(kv) = line.strip_prefix('\t')
-            && let Some((k, v)) = kv.split_once(" = ")
-        {
-            fields.insert(k.trim(), v.trim());
+        if let Some(kv) = line.strip_prefix('\t') {
+            if let Some((k, v)) = kv.split_once(" = ") {
+                fields.insert(k.trim(), v.trim());
+            }
         }
     }
 
