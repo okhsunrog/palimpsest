@@ -1,6 +1,6 @@
-use palimpsest::dataset::{GetOptions, get, get_property};
-use palimpsest::models::PropertySourceKind;
-use palimpsest::{Cmd, RecordingRunner, ZfsError};
+use zfskit::dataset::{GetOptions, get, get_property};
+use zfskit::models::PropertySourceKind;
+use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));

@@ -1,5 +1,5 @@
-use palimpsest::pool::{ExportOptions, ImportOptions, export, import};
-use palimpsest::{Cmd, RecordingRunner, ZfsError};
+use zfskit::pool::{ExportOptions, ImportOptions, export, import};
+use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 #[tokio::test]
 async fn import_returns_ok_on_success() {

@@ -1,5 +1,5 @@
-use palimpsest::encryption::{load_key, load_key_with_passphrase, unload_key};
-use palimpsest::{Cmd, RecordingRunner, ZfsError};
+use zfskit::encryption::{load_key, load_key_with_passphrase, unload_key};
+use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));

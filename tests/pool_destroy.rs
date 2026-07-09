@@ -1,5 +1,5 @@
-use palimpsest::pool::{DestroyOptions, destroy};
-use palimpsest::{Cmd, RecordingRunner};
+use zfskit::pool::{DestroyOptions, destroy};
+use zfskit::{Cmd, RecordingRunner};
 
 #[tokio::test]
 async fn destroy_default_succeeds() {

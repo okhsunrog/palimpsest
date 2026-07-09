@@ -1,5 +1,5 @@
-use palimpsest::pool::set_property;
-use palimpsest::{Cmd, RecordingRunner};
+use zfskit::pool::set_property;
+use zfskit::{Cmd, RecordingRunner};
 
 #[tokio::test]
 async fn set_property_succeeds() {

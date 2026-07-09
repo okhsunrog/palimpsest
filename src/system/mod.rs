@@ -3,7 +3,7 @@
 //! `/proc/spl/kstat/zfs/`.
 //!
 //! Module is filesystem-IO based (not a CLI wrapper, not FFI). It sits in
-//! palimpsest because consumers (`arctern`'s admin UI, future archinstall
+//! zfskit because consumers (`arctern`'s admin UI, future archinstall
 //! diagnostics) all want the same parser and the same typed surface.
 
 pub mod arc;

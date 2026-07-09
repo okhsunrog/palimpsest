@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use palimpsest::pool::{PoolCreateOptions, RaidZLevel, Vdev, create};
-use palimpsest::{Cmd, RecordingRunner};
+use zfskit::pool::{PoolCreateOptions, RaidZLevel, Vdev, create};
+use zfskit::{Cmd, RecordingRunner};
 
 #[tokio::test]
 async fn create_minimal_single_disk_succeeds() {

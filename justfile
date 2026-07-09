@@ -6,9 +6,9 @@ SSH_PORT := "2226"
 # Build with `just iso-test` from that repo; the test variant
 # (filename contains "pre-testing") has root login with empty password.
 ISO_GLOB := env_var('HOME') + "/code/archinstall_zfs/gen_iso/out/archzfs-*-testing-*.iso"
-QEMU_LOG := "/tmp/palimpsest-qemu.log"
-QEMU_PIDFILE := "/tmp/palimpsest-qemu.pid"
-UEFI_VARS := "/tmp/palimpsest-OVMF_VARS.fd"
+QEMU_LOG := "/tmp/zfskit-qemu.log"
+QEMU_PIDFILE := "/tmp/zfskit-qemu.pid"
+UEFI_VARS := "/tmp/zfskit-OVMF_VARS.fd"
 SSH_TARGET := "root@localhost:" + SSH_PORT
 SSH_OPTS := "-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -o PreferredAuthentications=password -o PubkeyAuthentication=no"
 
@@ -99,22 +99,22 @@ vm-ssh:
 vm-log:
     @tail -n 80 {{QEMU_LOG}}
 
-# Sweep stale palimpsest_test_* pools and backing files inside the VM. Run
+# Sweep stale zfskit_test_* pools and backing files inside the VM. Run
 # after a panicked test to clean up stragglers.
 test-cleanup:
     @sshpass -p "" ssh {{SSH_OPTS}} -p {{SSH_PORT}} root@localhost "\
-        zpool list -H -o name 2>/dev/null | grep '^palimpsest_test_' | \
+        zpool list -H -o name 2>/dev/null | grep '^zfskit_test_' | \
         xargs -rn1 -I{} bash -c 'zpool destroy -f {} 2>/dev/null || true'; \
-        rm -f /tmp/palimpsest_test_*.img; \
-        rm -rf /tmp/palimpsest_test_*_root"
+        rm -f /tmp/zfskit_test_*.img; \
+        rm -rf /tmp/zfskit_test_*_root"
 
 # ─── Integration tests ─────────────────────────────────
 
 # Run the integration test suite against an already-running VM. Use
 # `just test-vm` for a one-shot boot+test+shutdown cycle.
 test-integration:
-    PALIMPSEST_SSH_TARGET={{SSH_TARGET}} \
-    PALIMPSEST_SSH_PASSWORD="" \
+    ZFSKIT_SSH_TARGET={{SSH_TARGET}} \
+    ZFSKIT_SSH_PASSWORD="" \
         cargo test --tests --features integration -- --test-threads=1
 
 # Boot VM, run integration tests, tear down. Slowest path; use for CI / a

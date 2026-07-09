@@ -1,9 +1,9 @@
 //! Shared helpers for integration tests. Compiled only when the `integration`
-//! feature is on; relies on `PALIMPSEST_SSH_TARGET=[user@]host[:port]`
+//! feature is on; relies on `ZFSKIT_SSH_TARGET=[user@]host[:port]`
 //! pointing at a throwaway VM with `zpool` + `zfs` in PATH.
 //!
 //! Pool isolation strategy:
-//! - Random pool name prefixed with `palimpsest_test_` so we can never
+//! - Random pool name prefixed with `zfskit_test_` so we can never
 //!   collide with a real pool and `just test-cleanup` can grep-and-destroy.
 //! - 256 MiB sparse file backing in `/tmp/<pool>.img`.
 //! - `-R <altroot>` import so every dataset's mountpoint is prefixed; the
@@ -16,17 +16,17 @@
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use palimpsest::pool::{DestroyOptions, ExportOptions, PoolCreateOptions, Vdev};
-use palimpsest::runner::{Cmd, CommandRunner};
-use palimpsest::{SshCommandRunner, Zfs, ZfsError};
+use zfskit::pool::{DestroyOptions, ExportOptions, PoolCreateOptions, Vdev};
+use zfskit::runner::{Cmd, CommandRunner};
+use zfskit::{SshCommandRunner, Zfs, ZfsError};
 
-/// Construct an `SshCommandRunner` from `PALIMPSEST_SSH_TARGET` /
-/// `PALIMPSEST_SSH_PASSWORD`. Panics with a clear message if the env var is
+/// Construct an `SshCommandRunner` from `ZFSKIT_SSH_TARGET` /
+/// `ZFSKIT_SSH_PASSWORD`. Panics with a clear message if the env var is
 /// unset — integration tests are unrunnable without it.
 pub fn ssh_runner_from_env() -> SshCommandRunner {
     SshCommandRunner::from_env().unwrap_or_else(|e| {
         panic!(
-            "integration test requires PALIMPSEST_SSH_TARGET=[user@]host[:port]: {e}\n\
+            "integration test requires ZFSKIT_SSH_TARGET=[user@]host[:port]: {e}\n\
              tip: `just vm-up` boots the archzfs test ISO and exports the right env"
         )
     })
@@ -68,7 +68,7 @@ impl LoopbackPool {
 
     pub async fn create_with_size(runner: SshCommandRunner, size: &str) -> Result<Self, ZfsError> {
         let suffix = unique_suffix();
-        let name = format!("palimpsest_test_{suffix}");
+        let name = format!("zfskit_test_{suffix}");
         let img_path = format!("/tmp/{name}.img");
         let altroot = format!("/tmp/{name}_root");
 
@@ -83,7 +83,7 @@ impl LoopbackPool {
             .mountpoint("none")
             .altroot(&altroot)
             .vdev(Vdev::Stripe(vec![img_path.clone().into()]));
-        palimpsest::pool::create(&runner, &opts).await?;
+        zfskit::pool::create(&runner, &opts).await?;
 
         Ok(Self {
             runner,
@@ -114,9 +114,9 @@ impl LoopbackPool {
     }
 
     async fn teardown_async(&self) -> Result<(), ZfsError> {
-        let _ = palimpsest::pool::export(&self.runner, &self.name, &ExportOptions::default()).await;
+        let _ = zfskit::pool::export(&self.runner, &self.name, &ExportOptions::default()).await;
         let _ =
-            palimpsest::pool::destroy(&self.runner, &self.name, &DestroyOptions { force: true })
+            zfskit::pool::destroy(&self.runner, &self.name, &DestroyOptions { force: true })
                 .await;
         let _ = run_check(&self.runner, Cmd::new("rm").args(["-f", &self.img_path])).await;
         let _ = run_check(&self.runner, Cmd::new("rm").args(["-rf", &self.altroot])).await;
@@ -132,9 +132,9 @@ impl Drop for LoopbackPool {
         if self.destroyed {
             return;
         }
-        let target = std::env::var("PALIMPSEST_SSH_TARGET").ok();
+        let target = std::env::var("ZFSKIT_SSH_TARGET").ok();
         let Some(target) = target else { return };
-        let pw = std::env::var("PALIMPSEST_SSH_PASSWORD").ok();
+        let pw = std::env::var("ZFSKIT_SSH_PASSWORD").ok();
         let cmds = [
             format!("zpool destroy -f {} 2>/dev/null || true", self.name),
             format!("rm -f {} 2>/dev/null || true", self.img_path),

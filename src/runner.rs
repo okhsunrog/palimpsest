@@ -375,13 +375,13 @@ impl SshCommandRunner {
         }
     }
 
-    /// Construct from `PALIMPSEST_SSH_TARGET=[user@]host[:port]`. Optionally
-    /// reads `PALIMPSEST_SSH_PASSWORD` for password auth via sshpass.
+    /// Construct from `ZFSKIT_SSH_TARGET=[user@]host[:port]`. Optionally
+    /// reads `ZFSKIT_SSH_PASSWORD` for password auth via sshpass.
     pub fn from_env() -> Result<Self, String> {
-        let raw = std::env::var("PALIMPSEST_SSH_TARGET")
-            .map_err(|_| "PALIMPSEST_SSH_TARGET not set".to_string())?;
+        let raw = std::env::var("ZFSKIT_SSH_TARGET")
+            .map_err(|_| "ZFSKIT_SSH_TARGET not set".to_string())?;
         let target = SshTarget::parse(&raw)?;
-        let password = std::env::var("PALIMPSEST_SSH_PASSWORD").ok();
+        let password = std::env::var("ZFSKIT_SSH_PASSWORD").ok();
         Ok(Self { target, password })
     }
 

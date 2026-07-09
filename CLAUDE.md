@@ -1,4 +1,4 @@
-# palimpsest
+# zfskit
 
 Async ZFS toolkit for Rust. Wraps `zfs(8)` and `zpool(8)` via `tokio::process::Command`. Used by two consumers: `archinstall_zfs` (Arch Linux installer) and `arctern` (ZFS replication daemon).
 
@@ -51,7 +51,7 @@ The send/recv/hold/bookmark/resume_token modules are arctern-specific. The pool/
 - `just vm-up` / `just vm-down` / `just vm-ssh` — manage the integration-test VM
 - `just test-integration` — run feature-gated integration tests against the running VM
 - `just test-vm` — one-shot boot + integration tests + shutdown (for CI)
-- `just test-cleanup` — sweep stale `palimpsest_test_*` pools inside the VM after a panic
+- `just test-cleanup` — sweep stale `zfskit_test_*` pools inside the VM after a panic
 
 ## How to add an operation
 
@@ -79,7 +79,7 @@ just vm-down          # when done
 
 **Pool isolation inside the VM** (see `tests/common/mod.rs`):
 
-- Random pool name `palimpsest_test_<nanos>_<seq>` — collision with anything real is impossible.
+- Random pool name `zfskit_test_<nanos>_<seq>` — collision with anything real is impossible.
 - 256 MiB sparse file in `/tmp/<pool>.img`.
 - `-R /tmp/<pool>_root` altroot import — every dataset's mountpoint is prefixed under the altroot, so the VM filesystem outside that path is untouchable.
 - `-m none` on the root dataset for belt-and-suspenders.

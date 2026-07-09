@@ -1,5 +1,5 @@
-use palimpsest::dataset::set_property;
-use palimpsest::{Cmd, RecordingRunner, ZfsError};
+use zfskit::dataset::set_property;
+use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 #[tokio::test]
 async fn set_property_succeeds() {

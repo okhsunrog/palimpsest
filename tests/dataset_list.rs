@@ -1,5 +1,5 @@
-use palimpsest::dataset::{DatasetType, ListOptions, list};
-use palimpsest::{Cmd, RecordingRunner, ZfsError};
+use zfskit::dataset::{DatasetType, ListOptions, list};
+use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 fn fixture(name: &str) -> Vec<u8> {
     let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));

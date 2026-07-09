@@ -1,5 +1,5 @@
-use palimpsest::dataset::{MountOptions, UnmountOptions, mount, mount_all, unmount, unmount_all};
-use palimpsest::{Cmd, RecordingRunner};
+use zfskit::dataset::{MountOptions, UnmountOptions, mount, mount_all, unmount, unmount_all};
+use zfskit::{Cmd, RecordingRunner};
 
 #[tokio::test]
 async fn mount_basic_succeeds() {

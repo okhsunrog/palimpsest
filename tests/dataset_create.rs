@@ -1,5 +1,5 @@
-use palimpsest::dataset::{CreateOptions, create};
-use palimpsest::{Cmd, RecordingRunner, ZfsError};
+use zfskit::dataset::{CreateOptions, create};
+use zfskit::{Cmd, RecordingRunner, ZfsError};
 
 #[tokio::test]
 async fn create_no_props_succeeds() {

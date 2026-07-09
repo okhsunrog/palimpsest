@@ -6,9 +6,9 @@
 
 mod common;
 
-use palimpsest::ZfsError;
-use palimpsest::dataset::{DestroyOptions, ListOptions, RollbackOptions, SnapshotOptions};
-use palimpsest::models::DatasetType;
+use zfskit::ZfsError;
+use zfskit::dataset::{DestroyOptions, ListOptions, RollbackOptions, SnapshotOptions};
+use zfskit::models::DatasetType;
 
 use common::{LoopbackPool, ssh_runner_from_env};
 
@@ -59,7 +59,7 @@ async fn list_recursive_with_empty_roots_returns_descendants() {
         .await
         .expect("create a/b");
 
-    let entries = palimpsest::dataset::list(
+    let entries = zfskit::dataset::list(
         &runner,
         &ListOptions {
             recursive: true,

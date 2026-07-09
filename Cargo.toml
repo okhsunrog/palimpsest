@@ -1,7 +1,16 @@
 [package]
-name = "palimpsest"
+name = "zfskit"
 version = "0.1.0"
 edition = "2024"
+description = "Async toolkit for OpenZFS: datasets, snapshots, send/recv streams, holds, bookmarks, pools - via the zfs/zpool CLI with JSON output"
+authors = ["Danila Gornushko <me@okhsunrog.dev>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/okhsunrog/zfskit"
+keywords = ["zfs", "openzfs", "snapshot", "replication", "async"]
+categories = ["filesystem", "asynchronous", "api-bindings"]
+readme = "README.md"
+documentation = "https://docs.rs/zfskit"
+exclude = ["justfile", "CLAUDE.md", ".gitignore"]
 
 [dependencies]
 async-trait = "0.1.89"
