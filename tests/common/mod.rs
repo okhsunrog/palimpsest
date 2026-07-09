@@ -116,8 +116,7 @@ impl LoopbackPool {
     async fn teardown_async(&self) -> Result<(), ZfsError> {
         let _ = zfskit::pool::export(&self.runner, &self.name, &ExportOptions::default()).await;
         let _ =
-            zfskit::pool::destroy(&self.runner, &self.name, &DestroyOptions { force: true })
-                .await;
+            zfskit::pool::destroy(&self.runner, &self.name, &DestroyOptions { force: true }).await;
         let _ = run_check(&self.runner, Cmd::new("rm").args(["-f", &self.img_path])).await;
         let _ = run_check(&self.runner, Cmd::new("rm").args(["-rf", &self.altroot])).await;
         Ok(())
