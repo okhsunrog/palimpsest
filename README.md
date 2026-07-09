@@ -18,10 +18,10 @@ by real consumers.
 
 ## Design
 
-- **CLI-only, no FFI.** No `libzfs`/`libzfs_core` bindings: the CLI is the
-  only interface OpenZFS actually stabilises, it needs no C toolchain or
-  kernel-matched headers, and a `zfs` binary over SSH works exactly like a
-  local one.
+- **CLI-only, no FFI.** No `libzfs`/`libzfs_core` bindings: using the command-line
+  interface avoids an unstable library ABI, needs no C toolchain or
+  kernel-matched headers, and supports the same `CommandRunner` API locally
+  and over SSH.
 - **JSON output, not tab-splitting.** Structured `-j` output (OpenZFS ≥ 2.3)
   is parsed into serde models; version-tolerant where field sets drift
   between ZFS releases.
@@ -59,7 +59,7 @@ async fn main() -> Result<(), zfskit::ZfsError> {
     let zfs = Zfs::new(); // system zfs(8)/zpool(8) via RealRunner
 
     // Pool health.
-    let status = zfs.pool("tank").status().await?;
+    let status = zfs.pool("tank")?.status().await?;
     println!("tank: {}", status.state);
 
     // Snapshots of one dataset, with their GUIDs.
