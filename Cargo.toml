@@ -11,7 +11,7 @@ keywords = ["zfs", "openzfs", "snapshot", "replication", "async"]
 categories = ["filesystem", "asynchronous", "api-bindings"]
 readme = "README.md"
 documentation = "https://docs.rs/zfskit"
-exclude = ["justfile", "CLAUDE.md", ".gitignore"]
+exclude = ["justfile", "CLAUDE.md", ".gitignore", ".github"]
 
 [dependencies]
 async-trait = "0.1.89"
