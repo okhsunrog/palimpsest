@@ -14,5 +14,5 @@ pub use get::{GetOptions, get, get_property};
 pub use list::{ListOptions, list};
 pub use mount::{MountOptions, UnmountOptions, mount, mount_all, unmount, unmount_all};
 pub use rollback::{RollbackOptions, rollback};
-pub use set::set_property;
+pub use set::{SetOptions, set_properties, set_property};
 pub use snapshot::{SnapshotOptions, snapshot, snapshot_many};

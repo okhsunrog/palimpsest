@@ -15,6 +15,35 @@ async fn create_no_props_succeeds() {
 }
 
 #[tokio::test]
+async fn create_no_mount_emits_dash_u_before_properties() {
+    // Boot-environment case: the mountpoint is fixed at creation time, but the
+    // dataset must not be mounted over the running system's /home.
+    let runner = RecordingRunner::new().record(
+        Cmd::new("zfs").args([
+            "create",
+            "-p",
+            "-u",
+            "-o",
+            "mountpoint=/home",
+            "tank/be0/data/home",
+        ]),
+        vec![],
+        vec![],
+        0,
+    );
+    create(
+        &runner,
+        "tank/be0/data/home",
+        &CreateOptions::new()
+            .create_parents()
+            .no_mount()
+            .property("mountpoint", "/home"),
+    )
+    .await
+    .expect("create with -u succeeds");
+}
+
+#[tokio::test]
 async fn create_with_properties_emits_dash_o_pairs() {
     let runner = RecordingRunner::new().record(
         Cmd::new("zfs").args([

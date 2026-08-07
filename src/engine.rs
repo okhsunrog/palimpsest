@@ -13,7 +13,8 @@
 use std::sync::Arc;
 
 use crate::dataset::{
-    CreateOptions, GetOptions, ListOptions, MountOptions, UnmountOptions, ZfsGetEntry, ZfsListEntry,
+    CreateOptions, GetOptions, ListOptions, MountOptions, SetOptions, UnmountOptions, ZfsGetEntry,
+    ZfsListEntry,
 };
 use crate::error::ZfsError;
 use crate::models::{PropertyValue, ZpoolGetEntry, ZpoolListEntry, ZpoolStatusEntry};
@@ -332,6 +333,20 @@ impl Dataset {
     /// `zfs set <property>=<value> <dataset>`.
     pub async fn set_property(&self, property: &str, value: &str) -> Result<(), ZfsError> {
         crate::dataset::set_property(&*self.runner, self.name.as_str(), property, value).await
+    }
+
+    /// `zfs set [-u] <property>=<value>… <dataset>` — several properties in one
+    /// invocation, with modifiers.
+    ///
+    /// Use `SetOptions::no_mount()` when changing `mountpoint` on a dataset that
+    /// must not be mounted right now, such as a boot environment being prepared
+    /// from the running system.
+    pub async fn set_properties(
+        &self,
+        properties: &[(&str, &str)],
+        opts: &SetOptions,
+    ) -> Result<(), ZfsError> {
+        crate::dataset::set_properties(&*self.runner, self.name.as_str(), properties, opts).await
     }
 
     /// `zfs mount [-R] <dataset>`. Idempotent on already-mounted.
@@ -670,6 +685,33 @@ mod tests {
             .set_property("compression", "zstd")
             .await
             .expect("set_property succeeds");
+    }
+
+    #[tokio::test]
+    async fn dataset_set_properties_no_mount_via_handle() {
+        let runner = RecordingRunner::new().record(
+            Cmd::new("zfs").args(["set", "-u", "mountpoint=/home", "tank/be0/data/home"]),
+            vec![],
+            vec![],
+            0,
+        );
+        let zfs = Zfs::with_runner(runner);
+        zfs.dataset("tank/be0/data/home")
+            .unwrap()
+            .set_properties(&[("mountpoint", "/home")], &SetOptions::new().no_mount())
+            .await
+            .expect("set_properties with -u succeeds");
+    }
+
+    #[tokio::test]
+    async fn dataset_set_properties_empty_is_noop() {
+        // No command is recorded, so a runner call would panic on unknown input.
+        let zfs = Zfs::with_runner(RecordingRunner::new());
+        zfs.dataset("tank/data")
+            .unwrap()
+            .set_properties(&[], &SetOptions::default())
+            .await
+            .expect("empty property list is a no-op");
     }
 
     #[tokio::test]
