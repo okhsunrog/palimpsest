@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.2.1] — 2026-08-14
+
+### Added
+
+- `CreateOptions::no_mount()` support for creating datasets with `zfs create -u`.
+- `SetOptions::no_mount()` and multi-property setters for changing mount-related
+  properties without mounting datasets.
+
 ## [0.2.0] — 2026-07-10
 
 This release is a breaking API redesign. It requires Rust 1.85+ and OpenZFS
@@ -44,4 +52,5 @@ zfskit.
   handles; waiting closes untaken pipes to avoid deadlocks.
 - Send/receive stderr is drained concurrently to avoid pipe-buffer stalls.
 
+[0.2.1]: https://github.com/okhsunrog/zfskit/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/okhsunrog/zfskit/compare/7931a91...v0.2.0
